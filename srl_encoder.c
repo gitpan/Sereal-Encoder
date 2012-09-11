@@ -134,6 +134,7 @@ static SRL_INLINE PTABLE_t *srl_init_weak_hash(srl_encoder_t *enc);
 } STMT_END
 
 
+
 /* This is fired when we exit the Perl pseudo-block.
  * It frees our encoder and all. Put encoder-level cleanup
  * logic here so that we can simply use croak/longjmp for
@@ -216,25 +217,44 @@ srl_build_encoder_struct(pTHX_ HV *opt)
 
     /* load options */
     if (opt != NULL) {
+        int undef_unknown = 0;
         /* SRL_F_SHARED_HASHKEYS on by default */
         svp = hv_fetchs(opt, "no_shared_hashkeys", 0);
         if ( !svp || !SvTRUE(*svp) )
-          enc->flags |= SRL_F_SHARED_HASHKEYS;
+            enc->flags |= SRL_F_SHARED_HASHKEYS;
 
         svp = hv_fetchs(opt, "croak_on_bless", 0);
         if ( svp && SvTRUE(*svp) )
-          enc->flags |= SRL_F_CROAK_ON_BLESS;
+            enc->flags |= SRL_F_CROAK_ON_BLESS;
 
         svp = hv_fetchs(opt, "snappy", 0);
         if ( svp && SvTRUE(*svp) )
-          enc->flags |= SRL_F_COMPRESS_SNAPPY;
+            enc->flags |= SRL_F_COMPRESS_SNAPPY;
+
+        svp = hv_fetchs(opt, "undef_unknown", 0);
+        if ( svp && SvTRUE(*svp) ) {
+            undef_unknown = 1;
+            enc->flags |= SRL_F_UNDEF_UNKNOWN;
+        }
+
+        svp = hv_fetchs(opt, "stringify_unknown", 0);
+        if ( svp && SvTRUE(*svp) ) {
+            if (expect_false( undef_unknown )) {
+                croak("'undef_unknown' and 'stringify_unknown' "
+                      "options are mutually exclusive");
+            }
+            enc->flags |= SRL_F_STRINGIFY_UNKNOWN;
+        }
+
+        svp = hv_fetchs(opt, "warn_unknown", 0);
+        if ( svp && SvTRUE(*svp) )
+            enc->flags |= SRL_F_WARN_UNKNOWN;
     }
     else {
         /* SRL_F_SHARED_HASHKEYS on by default */
         enc->flags |= SRL_F_SHARED_HASHKEYS;
     }
     DEBUG_ASSERT_BUF_SANE(enc);
-
     return enc;
 }
 
@@ -603,7 +623,6 @@ srl_dump_hv(pTHX_ srl_encoder_t *enc, HV *src, U32 refcount)
 
     if ( SvMAGICAL(src) ) {
         UV i;
-        /* can we trust this if the hash is a tie? */
         /* for tied hashes, we have to iterate to find the number of entries. Alas... */
         (void)hv_iterinit(src); /* return value not reliable according to API docs */
         n = 0;
@@ -625,16 +644,14 @@ srl_dump_hv(pTHX_ srl_encoder_t *enc, HV *src, U32 refcount)
         while ((he = hv_iternext(src))) {
             SV *v;
             if (expect_false( i == n ))
-                croak("Trying to dump a tied hash that has a different number of keys in each iteration is just daft. Do not do that.");
+                croak("Panic: Trying to dump a tied hash that has a different number of keys in each iteration is just daft. Do not do that.");
             v= hv_iterval(src, he);
-            if (SvMAGICAL(v))
-                mg_get(v);
             srl_dump_hk(aTHX_ enc, he, do_share_keys);
             CALL_SRL_DUMP_SV(enc, v);
             ++i;
         }
         if (expect_false( i != n ))
-            croak("Trying to dump a tied hash that has a different number of keys in each iteration is just daft. Do not do that.");
+            croak("Panic: Trying to dump a tied hash that has a different number of keys in each iteration is just daft. Do not do that.");
 
     } else {
         n= HvUSEDKEYS(src);
@@ -757,6 +774,7 @@ srl_dump_sv(pTHX_ srl_encoder_t *enc, SV *src)
     UV refcount;
     svtype svt;
     MAGIC *mg;
+    SV* refsv= NULL;
     UV weakref_ofs= 0;              /* preserved between loops */
     char *ref_rewrite_pos= NULL;    /* preserved between loops */
     assert(src);
@@ -814,7 +832,6 @@ redo_dump:
                 SRL_SET_FBIT(*(enc->buf_start + oldoffset));
                 return;
             }
-            ref_rewrite_pos= NULL;
             if (DEBUGHACK) warn("storing %p as %lu", src, BUF_POS_OFS(enc));
             PTABLE_store(ref_seenhash, src, (void *)BUF_POS_OFS(enc));
         }
@@ -864,6 +881,7 @@ redo_dump:
             srl_dump_classname(aTHX_ enc, referent);
         }
         srl_buf_cat_char(enc, SRL_HDR_REFN);
+        refsv= src;
         src= referent;
         goto redo_dump;
     }
@@ -887,15 +905,49 @@ redo_dump:
         srl_dump_av(aTHX_ enc, (AV *)src, refcount);
     }
     else
-    if (!SvOK(src)) {
-        /* undef */
-        srl_buf_cat_char(enc, SRL_HDR_UNDEF);
+    if (!SvOK(src)) { /* undef and weird shit */
+        if ( svt > SVt_PVMG ) {  /* we exclude magic, because magic sv's can be undef too */
+            /* called when we find an unsupported type/reference. May either throw exception
+             * or write ONE (nested or single) item to the buffer. */
+#define SRL_HANDLE_UNSUPPORTED_TYPE(enc, src, svt, refsv, ref_rewrite_pos)                     \
+            STMT_START {                                                                       \
+                if ( SRL_ENC_HAVE_OPTION((enc), SRL_F_UNDEF_UNKNOWN) ) {                       \
+                    if (SRL_ENC_HAVE_OPTION((enc), SRL_F_WARN_UNKNOWN))                        \
+                        warn("Found type %u %s(0x%p), but it is not representable "            \
+                             " by the Sereal encoding format; will encode as an "              \
+                             "undefined value", (svt), sv_reftype((src),0),(src));             \
+                    if (ref_rewrite_pos)                                                       \
+                        enc->pos= ref_rewrite_pos;                                             \
+                    srl_buf_cat_char((enc), SRL_HDR_UNDEF);                                    \
+                }                                                                              \
+                else if ( SRL_ENC_HAVE_OPTION((enc), SRL_F_STRINGIFY_UNKNOWN) ) {              \
+                    STRLEN len;                                                                \
+                    char *str;                                                                 \
+                    if (SRL_ENC_HAVE_OPTION((enc), SRL_F_WARN_UNKNOWN))                        \
+                        warn("Found type %u %s(0x%p), but it is not representable "            \
+                             " by the Sereal encoding format; will encode as a "               \
+                             "stringified form", (svt), sv_reftype((src),0),(src));            \
+                    if (refsv) {                                                               \
+                        enc->pos= ref_rewrite_pos;                                             \
+                        str = SvPV((refsv), len);                                              \
+                    } else                                                                     \
+                        str = SvPV((src), len);                                                \
+                    srl_dump_pv(aTHX_ (enc), (str), len, SvUTF8(src));                         \
+                }                                                                              \
+                else {                                                                         \
+                    croak("Found type %u %s(0x%p), but it is not representable "               \
+                          "by the Sereal encoding format", (svt), sv_reftype((src),0),(src));  \
+                }                                                                              \
+            } STMT_END
+            SRL_HANDLE_UNSUPPORTED_TYPE(enc, src, svt, refsv, ref_rewrite_pos);
+        }
+        else {
+            srl_buf_cat_char(enc, SRL_HDR_UNDEF);
+        }
     }
-    else
-    {
-        croak("found type %u %s(0x%p), but it is not representable by the Sereal encoding format", svt, sv_reftype(src,0),src);
+    else {
+        SRL_HANDLE_UNSUPPORTED_TYPE(enc, src, svt, refsv, ref_rewrite_pos);
+#undef SRL_HANDLE_UNSUPPORTED_TYPE
     }
 }
-
-
 

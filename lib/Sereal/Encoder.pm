@@ -5,7 +5,7 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 use Exporter 'import';
 our @EXPORT;
 BEGIN { push @EXPORT,"encode_sereal" if $0=~/-e/}
@@ -46,9 +46,13 @@ The two are released separately to allow for independent and safer upgrading.
 The Sereal protocol version emitted by this encoder implementation is currently
 protocol version 1.
 
-Right now, the protocol specification can be found in the F<srl_protocol.h>
-header file within this distribution. The specification might be moved to
-documentation at a later date.
+The protocol specification and many other bits of documentation
+can be found in the github repository. Right now, the specification is at
+L<https://github.com/Sereal/Sereal/blob/master/sereal_spec.pod>,
+there is a discussion of the design objectives in
+L<https://github.com/Sereal/Sereal/blob/master/README.pod>, and the output
+of our benchmarks can be seen at
+L<https://github.com/Sereal/Sereal/wiki/Sereal-Comparison-Graphs>.
 
 =head1 CLASS METHODS
 
@@ -69,15 +73,6 @@ By skipping the detection of repeated hash keys, performance goes up a bit,
 but the size of the output can potentially be much larger.
 Do not disable this unless you have a reason to.
 
-=item croak_on_bless
-
-If this option is set, then the encoder will refuse to serialize blessed
-references and throw an exception instead.
-
-This can be important because blessed references can mean executing
-a destructor on a remote system or generally executing code based on
-data.
-
 =item snappy
 
 If set, the main payload of the Sereal document will be compressed using
@@ -87,6 +82,38 @@ If in doubt, test with your data whether this helps or not.
 
 The decoder (version 0.04 and up) will know how to handle Snappy-compressed
 Sereal documents transparently.
+
+=item croak_on_bless
+
+If this option is set, then the encoder will refuse to serialize blessed
+references and throw an exception instead.
+
+This can be important because blessed references can mean executing
+a destructor on a remote system or generally executing code based on
+data.
+
+=item undef_unknown
+
+If set, unknown/unsupported data structures will be encoded as C<undef>
+instead of throwing an exception.
+
+Mutually exclusive with C<stringify_unknown>.
+See also C<warn_unknown> below.
+
+=item stringify_unknown
+
+If set, unknown/unsupported data structures will be stringified and
+encoded as that string instead of throwing an exception. The
+stringification may cause a warning to be emitted by perl.
+
+Mutually exclusive with C<undef_unknown>.
+See also C<warn_unknown> below.
+
+=item warn_unknown
+
+If set, any unknown/unsupported data structure encountered will emit a
+warning. Only has an effect if C<undef_unknown> or C<stringify_unknown>
+are enabled.
 
 =back
 

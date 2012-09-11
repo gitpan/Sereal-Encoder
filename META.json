@@ -29,7 +29,8 @@
             "File::Spec" : "0",
             "Scalar::Util" : "0",
             "Test::LongString" : "0",
-            "Test::More" : "0.88"
+            "Test::More" : "0.88",
+            "Test::Warn" : "0"
          }
       },
       "configure" : {
@@ -50,5 +51,5 @@
          "url" : "git://github.com/tsee/Sereal.git"
       }
    },
-   "version" : "0.06"
+   "version" : "0.07"
 }
