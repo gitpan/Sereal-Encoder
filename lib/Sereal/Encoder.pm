@@ -5,7 +5,7 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 use Exporter 'import';
 our @EXPORT;
 BEGIN { push @EXPORT,"encode_sereal" if $0=~/-e/}
@@ -82,6 +82,13 @@ If in doubt, test with your data whether this helps or not.
 
 The decoder (version 0.04 and up) will know how to handle Snappy-compressed
 Sereal documents transparently.
+
+=item snappy_threshold
+
+The size threshold (in bytes) of the uncompressed output below which
+snappy compression is not even attempted even if enabled.
+Defaults to one kilobyte (1024 bytes). Set to 0 and C<snappy> to enabled
+to always compress.
 
 =item croak_on_bless
 
