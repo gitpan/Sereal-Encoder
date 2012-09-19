@@ -14,7 +14,7 @@ BEGIN {
 
 use Sereal::TestSet qw(:all);
 
-use Test::More tests => 14;
+use Test::More tests => 16;
 
 my ($ok, $err, $out);
 
@@ -23,11 +23,15 @@ SCOPE: {
     my $e = Sereal::Encoder->new({
         croak_on_bless => 1,
     });
+
+    is($e->encode(1), $Header.integer(1), "Encoder works before exception");
     $ok = eval{$out = $e->encode(bless({}, "Foo")); 1};
     $err = $@ || 'Zombie error';
 
     ok(!$ok, "Object throws exception");
     ok($err =~ /object/i, 'Exception refers to object');
+
+    is($e->encode(1), $Header.integer(1), "Encoder works after exception");
 
     $ok =  eval {$out = $e->encode({}); 1};
     ok($ok, "Non-blessed hash does not throw exception");
@@ -72,7 +76,8 @@ SCOPE: {
         {
             $ok = eval {$out = $e->encode($sub); 1};
         }
-        qr/Sereal/;
+        qr/Sereal/,
+        "warn_unknown warns about stringified sub";
 }
 
 # test that blessed code refs with stringify_unknown don't throw exceptions

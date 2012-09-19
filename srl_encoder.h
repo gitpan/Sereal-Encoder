@@ -30,7 +30,7 @@ typedef struct {
 /* constructor; don't need destructor, this sets up a callback */
 srl_encoder_t *srl_build_encoder_struct(pTHX_ HV *opt);
 
-void srl_clear_encoder(srl_encoder_t *enc);
+void srl_clear_encoder(pTHX_ srl_encoder_t *enc);
 
 /* Explicit destructor */
 void srl_destroy_encoder(pTHX_ srl_encoder_t *enc);
@@ -46,7 +46,7 @@ void srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src);
  * Corresponds to the inverse of constructor option "no_shared_hashkeys" */
 #define SRL_F_SHARED_HASHKEYS                1UL
 /* If set, then we're using the OO interface and we shouldn't destroy the
- * encoder struct during SAVEDESTRUCTOR time */
+ * encoder struct during SAVEDESTRUCTOR_X time */
 #define SRL_F_REUSE_ENCODER                  2UL
 /* If set in flags, then we rather croak than serialize an object.
  * Corresponds to the 'croak_on_bless' option to the Perl constructor. */
