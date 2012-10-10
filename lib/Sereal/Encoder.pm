@@ -5,10 +5,10 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '0.12';
+our $VERSION = '0.14';
 
 # not for public consumption, just for testing.
-my $TestCompat = [qw( 0.11 0.10 0.09 0.08 0.07 0.06 )];
+my $TestCompat = [qw( 0.13 0.12 0.11 0.10 0.09 0.08 0.07 0.06 )];
 sub _test_compat {return(@$TestCompat, $VERSION)}
 
 use Exporter 'import';
@@ -123,9 +123,15 @@ See also C<warn_unknown> below.
 
 =item warn_unknown
 
-If set, any unknown/unsupported data structure encountered will emit a
-warning. Only has an effect if C<undef_unknown> or C<stringify_unknown>
+Only has an effect if C<undef_unknown> or C<stringify_unknown>
 are enabled.
+
+If set to a positive integer,
+any unknown/unsupported data structure encountered will emit a
+warning. If set to a negative integer, it will warn for unsupported
+data structures just the same as for a positive value with one
+exception: For blessed, unsupported items that have string overloading,
+we silently stringify without warning.
 
 =back
 
