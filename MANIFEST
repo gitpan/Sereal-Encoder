@@ -1,6 +1,7 @@
 author_tools/bench.pl
 author_tools/hobodecoder.pl
 author_tools/numeric_str_length.c
+author_tools/stringify_test.c
 author_tools/update_from_header.pl
 author_tools/valgrind.supp
 Changes
@@ -13,8 +14,6 @@ lib/Sereal/Encoder.pm
 lib/Sereal/Encoder/Constants.pm
 Makefile.PL
 MANIFEST			This list of files
-MYMETA.json
-MYMETA.yml
 ppport.h
 ptable.h
 snappy/csnappy.h
@@ -36,6 +35,7 @@ t/100_roundtrip.t
 t/200_bulk.t
 t/300_fail.t
 t/400_evil.t
+t/800_threads.t
 t/data/corpus
 t/lib/Sereal/BulkTest.pm
 t/lib/Sereal/TestSet.pm

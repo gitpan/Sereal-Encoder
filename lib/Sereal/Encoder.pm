@@ -5,10 +5,10 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '0.14';
+our $VERSION = '0.15';
 
 # not for public consumption, just for testing.
-my $TestCompat = [qw( 0.13 0.12 0.11 0.10 0.09 0.08 0.07 0.06 )];
+my $TestCompat = [qw( 0.14 0.13 0.12 0.11 0.10 0.09 0.08 0.07 0.06 )];
 sub _test_compat {return(@$TestCompat, $VERSION)}
 
 use Exporter 'import';
@@ -16,6 +16,8 @@ our @EXPORT_OK = qw(encode_sereal);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 # export by default if run from command line
 our @EXPORT = ((caller())[1] eq '-e' ? @EXPORT_OK : ());
+
+sub CLONE_SKIP {1}
 
 XSLoader::load('Sereal::Encoder', $VERSION);
 
@@ -167,6 +169,14 @@ to be serialized. For ready-made comparison scripts, see the
 F<author_tools/bench.pl> and F<author_tools/dbench.pl> programs that are part
 of this distribution. Suffice to say that this library is easily competitive
 in both time and space efficiency with the best alternatives.
+
+=head1 THREAD-SAFETY
+
+C<Sereal::Encoder> is thread-safe on Perl's 5.8.7 and higher. This means
+"thread-safe" in the sense that if you create a new thread, all
+C<Sereal::Encoder> objects will become a reference to undef in the new
+thread. This might change in a future release to become a full clone
+of the encoder object.
 
 =head1 AUTHOR
 
