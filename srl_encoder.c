@@ -460,6 +460,7 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
     }
     else {
         ptrdiff_t sereal_header_len;
+        STRLEN uncompressed_body_length;
 
         /* Alas, have to write entire packet first since the header length
          * will determine offsets. */
@@ -467,25 +468,25 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
         sereal_header_len = enc->pos - enc->buf_start;
         srl_dump_sv(aTHX_ enc, src);
         srl_fixup_weakrefs(aTHX_ enc);
+        assert(BUF_POS_OFS(enc) > sereal_header_len);
+        uncompressed_body_length = BUF_POS_OFS(enc) - sereal_header_len;
 
         /* Don't bother with snappy compression at all if we have less than $threshold bytes of payload */
         if (enc->snappy_threshold > 0
-            && enc->pos - enc->buf_start - sereal_header_len < enc->snappy_threshold)
+            && uncompressed_body_length < (STRLEN)enc->snappy_threshold)
         {
-            /* sizeof(const char *) includes a count ofr \0 */
+            /* sizeof(const char *) includes a count of \0 */
             char *flags_and_version_byte = enc->buf_start + sizeof(SRL_MAGIC_STRING) - 1;
             /* disable snappy flag in header */
             *flags_and_version_byte = SRL_PROTOCOL_ENCODING_RAW |
                                       (*flags_and_version_byte & SRL_PROTOCOL_VERSION_MASK);
         }
         else {
-            STRLEN uncompressed_length;
             char *old_buf;
             uint32_t dest_len;
 
             /* Get uncompressed payload and total packet output (after compression) lengths */
-            uncompressed_length = BUF_POS_OFS(enc) - sereal_header_len;
-            dest_len = csnappy_max_compressed_length(uncompressed_length) + sereal_header_len + 1;
+            dest_len = csnappy_max_compressed_length(uncompressed_body_length) + sereal_header_len + 1;
 
             /* Lazy working buffer alloc */
             if (expect_false( enc->snappy_workmem == NULL )) {
@@ -506,18 +507,20 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
             enc->buf_end = enc->buf_start + dest_len;
 
             /* Copy Sereal header */
-            Copy(old_buf, enc->pos, sereal_header_len, unsigned char);
+            Copy(old_buf, enc->pos, sereal_header_len, char);
             enc->pos += sereal_header_len;
 
             /*
-             * fprintf(stderr, "'%u' %u %u\n", enc->pos - enc->buf_start, uncompressed_length, (uncompressed_length+sereal_header_len));
+             * fprintf(stderr, "'%u' %u %u\n", enc->pos - enc->buf_start, uncompressed_body_length, (uncompressed_body_length+sereal_header_len));
              * fprintf(stdout, "%7s!%1s\n", old_buf, old_buf+6);
              */
-            csnappy_compress(old_buf+sereal_header_len, (uint32_t)uncompressed_length, enc->pos, &dest_len,
+            csnappy_compress(old_buf+sereal_header_len, (uint32_t)uncompressed_body_length, enc->pos, &dest_len,
                              enc->snappy_workmem, CSNAPPY_WORKMEM_BYTES_POWER_OF_TWO);
             /* fprintf(stderr, "%u, %u %u %u\n", dest_len, enc->pos[0], enc->pos[1], enc->pos[2]); */
+            assert(dest_len != 0);
             Safefree(old_buf);
             enc->pos += dest_len;
+            assert(enc->pos <= enc->buf_end);
 
 #if 0
             if (expect_false( dest_len >= uncompressed_length )) {
@@ -844,13 +847,13 @@ srl_dump_sv(pTHX_ srl_encoder_t *enc, SV *src)
     MAGIC *mg;
     SV* refsv= NULL;
     UV weakref_ofs= 0;              /* preserved between loops */
-    char *ref_rewrite_pos= NULL;    /* preserved between loops */
+    ssize_t ref_rewrite_pos= 0;      /* preserved between loops */
     assert(src);
 
 redo_dump:
     svt = SvTYPE(src);
     refcount = SvREFCNT(src);
-
+    DEBUG_ASSERT_BUF_SANE(enc);
     if ( SvMAGICAL(src) ) {
         SvGETMAGIC(src);
         if ( ( mg = mg_find(src, PERL_MAGIC_backref) ) ) {
@@ -891,7 +894,7 @@ redo_dump:
                 /* we have seen it before, so we do not need to bless it again */
                 if (ref_rewrite_pos) {
                     if (DEBUGHACK) warn("ref to %p as %lu", src, oldoffset);
-                    enc->pos= ref_rewrite_pos;
+                    enc->pos= enc->buf_start + ref_rewrite_pos;
                     srl_buf_cat_varint(aTHX_ enc, SRL_HDR_REFP, (UV)oldoffset);
                 } else {
                     if (DEBUGHACK) warn("alias to %p as %lu", src, oldoffset);
@@ -936,7 +939,7 @@ redo_dump:
             weakref_ofs= BUF_POS_OFS(enc);
             srl_buf_cat_char(enc, SRL_HDR_WEAKEN);
         }
-        ref_rewrite_pos= enc->pos;
+        ref_rewrite_pos= BUF_POS_OFS(enc);
         if (sv_isobject(src)) {
             /* Check that we actually want to support objects */
             if (expect_false( SRL_ENC_HAVE_OPTION(enc, SRL_F_CROAK_ON_BLESS)) ) {
@@ -985,7 +988,7 @@ redo_dump:
                              "by the Sereal encoding format; will encode as an "               \
                              "undefined value", (svt), sv_reftype((src),0),(src));             \
                     if (ref_rewrite_pos)                                                       \
-                        enc->pos= ref_rewrite_pos;                                             \
+                        enc->pos= enc->buf_start + ref_rewrite_pos;                            \
                     srl_buf_cat_char((enc), SRL_HDR_UNDEF);                                    \
                 }                                                                              \
                 else if ( SRL_ENC_HAVE_OPTION((enc), SRL_F_STRINGIFY_UNKNOWN) ) {              \
@@ -1008,7 +1011,7 @@ redo_dump:
                         }                                                                      \
                     }                                                                          \
                     if (refsv) {                                                               \
-                        enc->pos= ref_rewrite_pos;                                             \
+                        enc->pos= enc->buf_start + ref_rewrite_pos;                            \
                         str = SvPV((refsv), len);                                              \
                     } else                                                                     \
                         str = SvPV((src), len);                                                \
