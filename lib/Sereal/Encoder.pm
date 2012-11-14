@@ -5,10 +5,10 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '0.17';
+our $VERSION = '0.18';
 
 # not for public consumption, just for testing.
-my $TestCompat = [qw( 0.16 0.15 0.14 0.13 0.12 0.11 0.10 0.09 0.08 0.07 0.06 )];
+my $TestCompat = [qw( 0.17 0.16 0.15 0.14 0.13 0.12 0.11 0.10 0.09 0.08 0.07 0.06 )];
 sub _test_compat {return(@$TestCompat, $VERSION)}
 
 use Exporter 'import';
@@ -188,7 +188,7 @@ Steffen Mueller E<lt>smueller@cpan.orgE<gt>
 
 Rafaël Garcia-Suarez
 
-Ævar Arnfjörð Bjarmason
+Ævar Arnfjörð Bjarmason E<lt>avar@cpan.orgE<gt>
 
 Some inspiration and code was taken from Marc Lehmann's
 excellent JSON::XS module due to obvious overlap in
