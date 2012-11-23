@@ -32,6 +32,7 @@ t/002_constants.t
 t/003_ptable.t
 t/010_desperate.t
 t/100_roundtrip.t
+t/160_recursion.t
 t/200_bulk.t
 t/300_fail.t
 t/400_evil.t
