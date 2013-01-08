@@ -31,6 +31,7 @@ t/001_load.t
 t/002_constants.t
 t/003_ptable.t
 t/010_desperate.t
+t/020_sort_keys.t
 t/100_roundtrip.t
 t/160_recursion.t
 t/200_bulk.t
@@ -41,5 +42,4 @@ t/data/corpus
 t/lib/Sereal/BulkTest.pm
 t/lib/Sereal/TestSet.pm
 typemap
-META.yml                                 Module YAML meta-data (added by MakeMaker)
-META.json                                Module JSON meta-data (added by MakeMaker)
+META.yml                                 Module meta-data (added by MakeMaker)

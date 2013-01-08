@@ -5,10 +5,10 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '0.20';
+our $VERSION = '0.23'; # Don't forget to update the TestCompat set for testing against installed decoders!
 
 # not for public consumption, just for testing.
-my $TestCompat = [map sprintf("%.2f", $_/100), reverse(6..19)]; # compat with 0.06 to ...
+my $TestCompat = [map sprintf("%.2f", $_/100), reverse(23..23)]; # compat with 0.23 to ...
 sub _test_compat {return(@$TestCompat, $VERSION)}
 
 use Exporter 'import';
@@ -67,11 +67,12 @@ L<https://github.com/Sereal/Sereal/wiki/Sereal-Comparison-Graphs>.
 
 Constructor. Optionally takes a hash reference as first parameter. This hash
 reference may contain any number of options that influence the behaviour of the
-encoder. Currently, the following options are recognized:
+encoder.
 
-=over 2
+Currently, the following options are recognized, none of them are on
+by default.
 
-=item no_shared_hashkeys
+=head3 no_shared_hashkeys
 
 When the C<no_shared_hashkeys> option is set ot a true value, then
 the encoder will disable the detection and elimination of repeated hash
@@ -80,7 +81,7 @@ By skipping the detection of repeated hash keys, performance goes up a bit,
 but the size of the output can potentially be much larger.
 Do not disable this unless you have a reason to.
 
-=item snappy
+=head3 snappy
 
 If set, the main payload of the Sereal document will be compressed using
 Google's Snappy algorithm. This can yield anywhere from no effect
@@ -90,14 +91,22 @@ If in doubt, test with your data whether this helps or not.
 The decoder (version 0.04 and up) will know how to handle Snappy-compressed
 Sereal documents transparently.
 
-=item snappy_threshold
+B<NOTE 1:> Do not use this if you want to parse multiple Sereal packets
+from the same buffer. Instead use C<snappy_incr> instead.
+
+=head3 snappy_incr
+
+Enables a version of the snappy protocol which is suitable for incremental
+parsing of packets. See also the C<snappy> option above for more details.
+
+=head3 snappy_threshold
 
 The size threshold (in bytes) of the uncompressed output below which
 snappy compression is not even attempted even if enabled.
 Defaults to one kilobyte (1024 bytes). Set to 0 and C<snappy> to enabled
 to always compress.
 
-=item croak_on_bless
+=head3 croak_on_bless
 
 If this option is set, then the encoder will refuse to serialize blessed
 references and throw an exception instead.
@@ -106,7 +115,7 @@ This can be important because blessed references can mean executing
 a destructor on a remote system or generally executing code based on
 data.
 
-=item undef_unknown
+=head3 undef_unknown
 
 If set, unknown/unsupported data structures will be encoded as C<undef>
 instead of throwing an exception.
@@ -114,7 +123,7 @@ instead of throwing an exception.
 Mutually exclusive with C<stringify_unknown>.
 See also C<warn_unknown> below.
 
-=item stringify_unknown
+=head3 stringify_unknown
 
 If set, unknown/unsupported data structures will be stringified and
 encoded as that string instead of throwing an exception. The
@@ -123,7 +132,7 @@ stringification may cause a warning to be emitted by perl.
 Mutually exclusive with C<undef_unknown>.
 See also C<warn_unknown> below.
 
-=item warn_unknown
+=head3 warn_unknown
 
 Only has an effect if C<undef_unknown> or C<stringify_unknown>
 are enabled.
@@ -135,7 +144,7 @@ data structures just the same as for a positive value with one
 exception: For blessed, unsupported items that have string overloading,
 we silently stringify without warning.
 
-=item max_recursion_depth
+=head3 max_recursion_depth
 
 C<Sereal::Encoder> is recursive. If you pass it a Perl data structure
 that is deeply nested, it will eventually exhaust the C stack. Therefore,
@@ -148,13 +157,29 @@ do so.
 Do note that the setting is somewhat approximate. Setting it to 10000 may break at
 somewhere between 9997 and 10003 nested structures depending on their types.
 
-=back
+=head3 sort_keys
+
+Normally C<Sereal::Encoder> will output hashes in whatever order is convenient,
+generally that used by perl to actually store the hash, or whatever order
+was returned by a tied hash.
+
+If this option is enabled then the Encoder will sort the keys before outputting
+them. It uses more memory, and is quite a bit slower than the default.
+
+Generally speaking this should mean that a hash and a copy should produce the
+same output. Nevertheless the user is warned that Perl has a way of "morphing"
+variables on use, and some of its rules are a little arcane (for instance utf8
+keys), and so two hashes that might appear to be the same might still produce
+different output as far as Sereal is concerned.
 
 The thusly allocated encoder object and its output buffer will be reused
 between invocations of C<encode()>, so hold on to it for an efficiency
 gain if you plan to serialize multiple similar data structures, but destroy
 it if you serialize a single very large data structure just once to free
 the memory.
+
+See L</NON-CANONICAL> for why you might want to use this, and for the
+various caveats involved.
 
 =head1 INSTANCE METHODS
 
@@ -191,6 +216,95 @@ C<Sereal::Encoder> objects will become a reference to undef in the new
 thread. This might change in a future release to become a full clone
 of the encoder object.
 
+=head1 NON-CANONICAL 
+
+You might want to compare two data structures by comparing their serialized
+byte strings.  For that to work reliably the serialization must take extra
+steps to ensure that identical data structures are encoded into identical
+serialized byte strings (a so-called "canonical representation").
+
+Currently the Sereal encoder I<does not> provide a mode that will reliably
+generate a canonical representation of a data structure. The reasons are many
+and sometimes subtle.
+
+Sereal does support some use-cases however. In this section we attempt to outline
+the issues well enough for you to decide if it is suitable for your needs.
+
+=over 4
+
+=item Sereal doesn't order the hash keys by default.
+
+This can be enabled via C<sort_keys>, see above.
+
+=item There are multiple valid Sereal documents that you can produce for the same Perl data structure.
+
+Just L<sorting hash keys|/sort_keys> is not enough. A trivial example is PAD bytes which
+mean nothing and are skipped. They mostly exist for encoder optimizations to
+prevent certain nasty backtracking situations from becoming O(n) at the cost of
+one byte of output. An explicit canonical mode would have to outlaw them (or
+add more of them) and thus require a much more complicated implementation of
+refcount/weakref handing in the encoder while at the same time causing some
+operations to go from O(1) to a full memcpy of everything after the point of
+where we backtracked to. Nasty.
+
+Another example is COPY. The COPY tag indicates that the next element is an
+identical copy of a previous element (which is itself forbidden from including
+COPY's other than for class names). COPY is purely internal. The Perl/XS
+implementation uses it to share hash keys and class names. One could use it for
+other strings (theoretically), but doesn't for time-efficiency reasons. We'd
+have to outlaw the use of this (significant) optimization of canonicalization.
+
+Sereal represents a reference to an array as a sequence of
+tags which, in its simplest form, reads I<REF, ARRAY $array_length TAG1 TAG2 ...>.
+The separation of "REF" and "ARRAY" is necessary to properly implement all of
+Perl's referencing and aliasing semantics correctly. Quite frequently, however,
+your array is only reference once and plainly so. If it's also at most 15 elements
+long, Sereal optimizes all of the "REF" and "ARRAY" tags, as well as the length
+into a special one byte ARRAYREF tag. This is a very significant optimization
+for common cases. This, however, does mean that most arrays up to 15 elements
+could be represented in two different, yet perfectly valid forms. ARRAYREF would
+have to be outlawed for a properly canonical form. The exact same logic
+applies to HASH vs. HASHREF.
+
+Similar to how Sereal can represent arrays and hashes in a full and a compact
+form. For small integers (between -16 and +15 inclusive), Sereal emits only
+one byte including the encoding of the type of data. For larger integers,
+it can use either varints (positive only) or zigzag encoding, which can also
+represent negative numbers. For a canonical mode, the space optimizations
+would have to be turned off and it would have to be explicitly specified
+whether varint or zigzag encoding is to be used for encoding positive
+integers.
+
+Perl may choose to retain multiple representations of a scalar. Specifically,
+it can convert integers, floating point numbers, and strings on the fly and
+will aggressively cache the results. Normally, it remembers which of the
+representations can be considered canonical, that means, which can be used
+to recreate the others reliably. For example, C<0> and C<"0">
+can both be considered canonical since they naturally transform into each
+other. Beyond intrinsic ambiguity, there are ways to
+trick Perl into allowing a single scalar to have distinct string, integer,
+and floating point representations that are all flagged as canonical, but can't
+be transformed into each other. These are the so-called dualvars. Sereal
+cannot represent dualvars (and that's a good thing).
+
+Floating point values can appear to be the same but serialize to different byte
+strings due to insignificant 'noise' in the floating point representation. Sereal
+supports different floating point precisions and will generally choose the most
+compact that can represent your floating point number correctly.
+
+These issues are especially relevant when considering language interoperability.
+
+=back
+
+Often, people don't actually care about "canonical" in the strict sense
+required for real I<identity> checking. They just require a best-effort sort of
+thing for caching. But it's a slippery slope!
+
+In a nutshell, the C<sort_keys> option may be sufficient for an application
+which is simply serializing a cache key, and thus there's little harm in an
+occasional false-negative, but think carefully before applying Sereal in other
+use-cases.
+
 =head1 AUTHOR
 
 Yves Orton E<lt>demerphq@gmail.comE<gt>
@@ -203,20 +317,22 @@ Rafaël Garcia-Suarez
 
 Ævar Arnfjörð Bjarmason E<lt>avar@cpan.orgE<gt>
 
+Tim Bunce
+
 Some inspiration and code was taken from Marc Lehmann's
-excellent JSON::XS module due to obvious overlap in
-problem domain.
+excellent L<JSON::XS> module due to obvious overlap in
+problem domain. Thank you!
 
 =head1 ACKNOWLEDGMENT
 
-This module was originally developed for booking.com.
-With approval from booking.com, this module was generalized
+This module was originally developed for Booking.com.
+With approval from Booking.com, this module was generalized
 and published on CPAN, for which the authors would like to express
 their gratitude.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2012 by Steffen Mueller
+Copyright (C) 2012, 2013 by Steffen Mueller
 
 The license for the code in this distribution is the following,
 with the exceptions listed below:
