@@ -41,12 +41,11 @@ extern "C" {
 #define HAS_SV2OBJ
 #endif
 
+#include "srl_protocol.h"
 #include "srl_encoder.h"
-
 #include "srl_common.h"
 #include "ptable.h"
 #include "srl_buffer.h"
-#include "srl_protocol.h"
 
 #include "snappy/csnappy_compress.c"
 
@@ -619,7 +618,7 @@ srl_fixup_weakrefs(pTHX_ srl_encoder_t *enc)
         if ( offset ) {
             char *pos = enc->buf_start + offset;
             assert(*pos == SRL_HDR_WEAKEN);
-            if (DEBUGHACK) warn("setting %lu to PAD", offset);
+            if (DEBUGHACK) warn("setting %lu to PAD", (long unsigned int)offset);
             *pos = SRL_HDR_PAD;
         }
     }
@@ -990,11 +989,15 @@ redo_dump:
     DEBUG_ASSERT_BUF_SANE(enc);
     if ( SvMAGICAL(src) ) {
         SvGETMAGIC(src);
+#ifdef Perl_hv_backreferences_p
         if (svt != SVt_PVHV)
+#endif
             mg = mg_find(src, PERL_MAGIC_backref);
     }
+#ifdef Perl_hv_backreferences_p
     if (svt == SVt_PVHV)
-        backrefs= *Perl_hv_backreferences_p(aTHX_ MUTABLE_HV(src));
+        backrefs= *Perl_hv_backreferences_p(aTHX_ (HV *)src);
+#endif
     if ( mg || backrefs ) {
         PTABLE_t *weak_seenhash= SRL_GET_WEAK_SEENHASH(enc);
         PTABLE_ENTRY_t *pe= PTABLE_find(weak_seenhash, src);
@@ -1033,18 +1036,18 @@ redo_dump:
             if (expect_false(oldoffset)) {
                 /* we have seen it before, so we do not need to bless it again */
                 if (ref_rewrite_pos) {
-                    if (DEBUGHACK) warn("ref to %p as %lu", src, oldoffset);
+                    if (DEBUGHACK) warn("ref to %p as %lu", src, (long unsigned int)oldoffset);
                     enc->pos= enc->buf_start + ref_rewrite_pos;
                     srl_buf_cat_varint(aTHX_ enc, SRL_HDR_REFP, (UV)oldoffset);
                 } else {
-                    if (DEBUGHACK) warn("alias to %p as %lu", src, oldoffset);
+                    if (DEBUGHACK) warn("alias to %p as %lu", src, (long unsigned int)oldoffset);
                     srl_buf_cat_varint(aTHX_ enc, SRL_HDR_ALIAS, (UV)oldoffset);
                 }
                 SRL_SET_FBIT(*(enc->buf_start + oldoffset));
                 --enc->recursion_depth;
                 return;
             }
-            if (DEBUGHACK) warn("storing %p as %lu", src, BUF_POS_OFS(enc));
+            if (DEBUGHACK) warn("storing %p as %lu", src, (long unsigned int)BUF_POS_OFS(enc));
             PTABLE_store(ref_seenhash, src, (void *)BUF_POS_OFS(enc));
         }
     }
