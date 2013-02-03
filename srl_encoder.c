@@ -627,31 +627,39 @@ srl_fixup_weakrefs(pTHX_ srl_encoder_t *enc)
 }
 
 #ifndef MAX_CHARSET_NAME_LENGTH
-#define MAX_CHARSET_NAME_LENGTH 2
+#    define MAX_CHARSET_NAME_LENGTH 2
 #endif
 
 #if PERL_VERSION == 10
 /*
 	Apparently regexes in 5.10 are "modern" but with 5.8 internals
 */
-#define RXf_PMf_STD_PMMOD_SHIFT 12
-#define RX_EXTFLAGS(re)	((re)->extflags)
-#define RX_PRECOMP(re) ((re)->precomp)
-#define RX_PRELEN(re) ((re)->prelen)
+#    define RXf_PMf_STD_PMMOD_SHIFT 12
+#    define RX_EXTFLAGS(re)	((re)->extflags)
+#    define RX_PRECOMP(re) ((re)->precomp)
+#    define RX_PRELEN(re) ((re)->prelen)
 
 // Maybe this is only on OS X, where SvUTF8(sv) exists but looks at flags that don't exist
-#define RX_UTF8(re) (RX_EXTFLAGS(re) & RXf_UTF8)
+#    define RX_UTF8(re) (RX_EXTFLAGS(re) & RXf_UTF8)
 
 #elif defined(SvRX)
-#define MODERN_REGEXP
+#    define MODERN_REGEXP
+     /* With commit 8d919b0a35f2b57a6bed2f8355b25b19ac5ad0c5 (perl.git) and
+      * release 5.17.6, regular expression are no longer SvPOK (IOW are no longer
+      * considered to be containing a string).
+      * This breaks some of the REGEXP detection logic in srl_dump_sv, so
+      * we need yet another CPP define. */
+#    if PERL_VERSION > 17 || (PERL_VERSION == 17 && PERL_SUBVERSION >= 6)
+#        define REGEXP_NO_LONGER_POK
+#    endif
 #else
-#define INT_PAT_MODS "msix"
-#define RXf_PMf_STD_PMMOD_SHIFT 12
-#define RX_PRECOMP(re) ((re)->precomp)
-#define RX_PRELEN(re) ((re)->prelen)
-#define RX_UTF8(re) ((re)->reganch & ROPT_UTF8)
-#define RX_EXTFLAGS(re) ((re)->reganch)
-#define RXf_PMf_COMPILETIME  PMf_COMPILETIME
+#    define INT_PAT_MODS "msix"
+#    define RXf_PMf_STD_PMMOD_SHIFT 12
+#    define RX_PRECOMP(re) ((re)->precomp)
+#    define RX_PRELEN(re) ((re)->prelen)
+#    define RX_UTF8(re) ((re)->reganch & ROPT_UTF8)
+#    define RX_EXTFLAGS(re) ((re)->reganch)
+#    define RXf_PMf_COMPILETIME  PMf_COMPILETIME
 #endif
 
 
@@ -1056,11 +1064,13 @@ redo_dump:
         assert(weakref_ofs == 0);
     }
     if (SvPOKp(src)) {
-#ifdef MODERN_REGEXP
+#if defined(MODERN_REGEXP) && !defined(REGEXP_NO_LONGER_POK)
+        /* Only need to enter here if we have rather modern regexps, but they're
+         * still POK (pre 5.17.6). */
         if (expect_false( svt == SVt_REGEXP ) ) {
             srl_dump_regexp(aTHX_ enc, src);
         }
-        else        
+        else
 #endif
         {
             STRLEN len;
@@ -1069,6 +1079,14 @@ redo_dump:
         }
     }
     else
+#if defined(MODERN_REGEXP) && defined(REGEXP_NO_LONGER_POK)
+    /* Only need to enter here if we have rather modern regexps AND they're
+     * NO LONGER POK (5.17.6 and up). */
+    if (expect_false( svt == SVt_REGEXP ) ) {
+        srl_dump_regexp(aTHX_ enc, src);
+    }
+    else
+#endif
     if (SvNOKp(src)) {
         /* dump floats */
         srl_dump_nv(aTHX_ enc, src);
@@ -1082,10 +1100,13 @@ redo_dump:
     if (SvROK(src)) {
         /* dump references */
         SV *referent= SvRV(src);
+/* assert()-like hack to be compiled out by default */
+#ifndef NDEBUG
         if (!referent) {
             sv_dump(src);
             assert(referent);
         }
+#endif
         if (SvWEAKREF(src)) {
             weakref_ofs= BUF_POS_OFS(enc);
             srl_buf_cat_char(enc, SRL_HDR_WEAKEN);
@@ -1114,7 +1135,7 @@ redo_dump:
         ((SvFLAGS(src) & (SVs_OBJECT|SVf_OK|SVs_GMG|SVs_SMG|SVs_RMG)) == (SVs_OBJECT|BFD_Svs_SMG_OR_RMG)) &&
         (mg = mg_find(src, PERL_MAGIC_qr))
     ) {
-            /* Houston, we have a regex! */
+        /* Houston, we have a regex! */
         srl_dump_regexp(aTHX_ enc, (SV*)mg); /* yes the SV* cast makes me feel dirty too */
     }
     else
