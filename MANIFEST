@@ -1,4 +1,3 @@
-.gdb_history
 author_tools/bench.pl
 author_tools/hobodecoder.pl
 author_tools/numeric_str_length.c
