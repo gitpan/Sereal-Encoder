@@ -17,6 +17,7 @@ MANIFEST			This list of files
 ppport.h
 ptable.h
 snappy/csnappy.h
+snappy/csnappy_compat.h
 snappy/csnappy_compress.c
 snappy/csnappy_decompress.c
 snappy/csnappy_internal.h
@@ -32,6 +33,7 @@ t/002_constants.t
 t/003_ptable.t
 t/010_desperate.t
 t/020_sort_keys.t
+t/021_sort_keys_option.t
 t/100_roundtrip.t
 t/160_recursion.t
 t/200_bulk.t
