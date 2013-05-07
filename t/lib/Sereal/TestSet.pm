@@ -172,6 +172,50 @@ our @BasicTests = (
 
     [{}, hash(), "empty hash ref"],
     [{foo => "baaaaar"}, hash(short_string("foo"),short_string("baaaaar")), "simple hash ref"],
+    [
+      [qw(foooo foooo foooo)],
+      sub {
+          my $opt = shift;
+          if ($opt->{dedupe_strings} || $opt->{aliased_dedupe_strings}) {
+              my $d = array_head(3);
+              my $pos = length($Header) + length($d);
+              my $tag = $opt->{aliased_dedupe_strings} ? SRL_HDR_ALIAS : SRL_HDR_COPY;
+              $d .= short_string("foooo") . chr($tag) . varint($pos)
+                    . chr($tag) . varint($pos);
+              return $d;
+          }
+          else {
+              return array(short_string("foooo"),short_string("foooo"), short_string("foooo"));
+          }
+      },
+      "ary ref with repeated string"
+    ],
+    [
+      [{foooo => "barrr"}, {barrr => "foooo"}],
+      array(hash(short_string("foooo"), short_string("barrr")),
+            hash(short_string("barrr"), short_string("foooo"))),
+      "ary ref of hash refs without repeated strings"
+    ],
+    [
+      [{foooo => "foooo"}, {foooo2 => "foooo"}],
+      sub {
+          my $opt = shift;
+          if ($opt->{dedupe_strings} || $opt->{aliased_dedupe_strings}) {
+              my $tag = $opt->{aliased_dedupe_strings} ? SRL_HDR_ALIAS : SRL_HDR_COPY;
+              my $d = array_head(2) . hash_head(2) . short_string("foooo");
+              my $pos = length($Header) + length($d);
+              $d .= short_string("foooo") . hash_head(2)
+                    . short_string("foooo2")
+                    . chr($tag) . varint($pos);
+              return $d;
+          }
+          else {
+              return array(hash(short_string("foooo"), short_string("foooo")),
+                           hash(short_string("foooo2"), short_string("foooo"))),
+          }
+      },
+      "ary ref of hash refs with repeated strings"
+    ],
     [$scalar_ref_for_repeating, chr(SRL_HDR_REFN).chr(0b0000_1001), "scalar ref to constant"],
     [[$scalar_ref_for_repeating, $scalar_ref_for_repeating],
         do {
@@ -628,36 +672,37 @@ sub run_roundtrip_tests_internal {
                     }
                     next;
                 };
-              my $decoded= $dec->($encoded);
-              ok( defined($decoded) == defined($data), "$name ($ename, $mname, decoded definedness)")
-                  or next;
-              my $encoded2 = $enc->($decoded);
-              ok(defined $encoded2, "$name ($ename, $mname, encoded2 defined)")
-                  or next;
-              my $decoded2 = $dec->($encoded2);
-              ok(defined($decoded2) == defined($data), "$name ($ename, $mname, decoded2 defined)")
-                  or next;
-              is_deeply($decoded, $data, "$name ($ename, $mname, decoded vs data)")
-                  or do {
-                      if ($ENV{DEBUG_DUMP}) {
-                          Dump($decoded);
-                          Dump($data);
-                      }
-                  };
-              is_deeply($decoded2, $data, "$name ($ename, $mname, decoded2 vs data)")
-                  or do {
-                      if ($ENV{DEBUG_DUMP}) {
-                          Dump($decoded2);
-                          Dump($data);
-                      }
-                  };
-              is_deeply($decoded, $decoded2, "$name ($ename, $mname, decoded vs decoded2)")
-                  or do {
-                      if ($ENV{DEBUG_DUMP}) {
-                          Dump($decoded);
-                          Dump($decoded2);
-                      }
-                  };
+            my $decoded= $dec->($encoded);
+            ok( defined($decoded) == defined($data), "$name ($ename, $mname, decoded definedness)")
+              or next;
+            my $encoded2 = $enc->($decoded);
+            ok(defined $encoded2, "$name ($ename, $mname, encoded2 defined)")
+              or next;
+            my $decoded2 = $dec->($encoded2);
+            ok(defined($decoded2) == defined($data), "$name ($ename, $mname, decoded2 defined)")
+              or next;
+            is_deeply($decoded, $data, "$name ($ename, $mname, decoded vs data)")
+              or do {
+                  if ($ENV{DEBUG_DUMP}) {
+                      Dump($decoded);
+                      Dump($data);
+                  }
+              };
+            is_deeply($decoded2, $data, "$name ($ename, $mname, decoded2 vs data)")
+              or do {
+                  if ($ENV{DEBUG_DUMP}) {
+                      Dump($decoded2);
+                      Dump($data);
+                  }
+              };
+            is_deeply($decoded, $decoded2, "$name ($ename, $mname, decoded vs decoded2)")
+              or do {
+                  if ($ENV{DEBUG_DUMP}) {
+                      Dump($decoded);
+                      Dump($decoded2);
+                  }
+              };
+            
             if (0) {
                 # It isnt really safe to test this way right now. The exact output
                 # of two runs of Sereal is not guaranteed to be the same due to the effect of

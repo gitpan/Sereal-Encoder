@@ -244,57 +244,65 @@ srl_build_encoder_struct(pTHX_ HV *opt)
     /* load options */
     if (opt != NULL) {
         int undef_unknown = 0;
+        int snappy = 0;
         /* SRL_F_SHARED_HASHKEYS on by default */
         svp = hv_fetchs(opt, "no_shared_hashkeys", 0);
         if ( !svp || !SvTRUE(*svp) )
-            enc->flags |= SRL_F_SHARED_HASHKEYS;
+            SRL_ENC_SET_OPTION(enc, SRL_F_SHARED_HASHKEYS);
 
         svp = hv_fetchs(opt, "croak_on_bless", 0);
         if ( svp && SvTRUE(*svp) )
-            enc->flags |= SRL_F_CROAK_ON_BLESS;
+            SRL_ENC_SET_OPTION(enc, SRL_F_CROAK_ON_BLESS);
 
         svp = hv_fetchs(opt, "no_bless_objects", 0);
         if ( svp && SvTRUE(*svp) )
-            enc->flags |= SRL_F_NO_BLESS_OBJECTS;
+            SRL_ENC_SET_OPTION(enc, SRL_F_NO_BLESS_OBJECTS);
 
         svp = hv_fetchs(opt, "snappy", 0);
-        if ( svp && SvTRUE(*svp) )
-            enc->flags |= SRL_F_COMPRESS_SNAPPY;
+        if ( svp && SvTRUE(*svp) ) {
+            snappy = 1;
+            SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY);
+        }
 
         svp = hv_fetchs(opt, "snappy_incr", 0);
-        if ( svp && SvTRUE(*svp) )
-            enc->flags |= SRL_F_COMPRESS_SNAPPY_INCREMENTAL;
+        if ( svp && SvTRUE(*svp) ) {
+            if (snappy)
+                croak("'snappy' and 'snappy_incr' options are mutually exclusive");
+            SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL);
+        }
 
         svp = hv_fetchs(opt, "undef_unknown", 0);
         if ( svp && SvTRUE(*svp) ) {
             undef_unknown = 1;
-            enc->flags |= SRL_F_UNDEF_UNKNOWN;
+            SRL_ENC_SET_OPTION(enc, SRL_F_UNDEF_UNKNOWN);
         }
 
         svp = hv_fetchs(opt, "sort_keys", 0);
-        if ( svp && SvTRUE(*svp) ) {
-            enc->flags |= SRL_F_SORT_KEYS;
-        }
+        if ( svp && SvTRUE(*svp) )
+            SRL_ENC_SET_OPTION(enc, SRL_F_SORT_KEYS);
 
-        svp = hv_fetchs(opt, "dedupe_strings", 0);
-        if ( svp && SvTRUE(*svp) ) {
-            enc->flags |= SRL_F_DEDUPE_STRINGS;
+        svp = hv_fetchs(opt, "aliased_dedupe_strings", 0);
+        if ( svp && SvTRUE(*svp) )
+            SRL_ENC_SET_OPTION(enc, SRL_F_ALIASED_DEDUPE_STRINGS | SRL_F_DEDUPE_STRINGS);
+        else {
+            svp = hv_fetchs(opt, "dedupe_strings", 0);
+            if ( svp && SvTRUE(*svp) )
+                SRL_ENC_SET_OPTION(enc, SRL_F_DEDUPE_STRINGS);
         }
 
         svp = hv_fetchs(opt, "stringify_unknown", 0);
         if ( svp && SvTRUE(*svp) ) {
-            if (expect_false( undef_unknown )) {
+            if (expect_false( undef_unknown ))
                 croak("'undef_unknown' and 'stringify_unknown' "
                       "options are mutually exclusive");
-            }
-            enc->flags |= SRL_F_STRINGIFY_UNKNOWN;
+            SRL_ENC_SET_OPTION(enc, SRL_F_STRINGIFY_UNKNOWN);
         }
 
         svp = hv_fetchs(opt, "warn_unknown", 0);
         if ( svp && SvTRUE(*svp) ) {
-            enc->flags |= SRL_F_WARN_UNKNOWN;
+            SRL_ENC_SET_OPTION(enc, SRL_F_WARN_UNKNOWN);
             if (SvIV(*svp) < 0)
-                enc->flags |= SRL_F_NOWARN_UNKNOWN_OVERLOAD;
+                SRL_ENC_SET_OPTION(enc, SRL_F_NOWARN_UNKNOWN_OVERLOAD);
         }
 
         svp = hv_fetchs(opt, "snappy_threshold", 0);
@@ -309,7 +317,7 @@ srl_build_encoder_struct(pTHX_ HV *opt)
     }
     else {
         /* SRL_F_SHARED_HASHKEYS on by default */
-        enc->flags |= SRL_F_SHARED_HASHKEYS;
+        SRL_ENC_SET_OPTION(enc, SRL_F_SHARED_HASHKEYS);
     }
 
     DEBUG_ASSERT_BUF_SANE(enc);
@@ -354,6 +362,20 @@ srl_init_string_deduper_hv(pTHX_ srl_encoder_t *enc)
     enc->string_deduper_hv = newHV();
     return enc->string_deduper_hv;
 }
+
+/* Lazy working buffer alloc */
+SRL_STATIC_INLINE void
+srl_init_snappy_workmem(pTHX_ srl_encoder_t *enc)
+{
+    /* Lazy working buffer alloc */
+    if (expect_false( enc->snappy_workmem == NULL )) {
+        /* Cleaned up automatically by the cleanup handler */
+        Newx(enc->snappy_workmem, CSNAPPY_WORKMEM_BYTES, char);
+        if (enc->snappy_workmem == NULL)
+            croak("Out of memory!");
+    }
+}
+
 
 void
 srl_write_header(pTHX_ srl_encoder_t *enc)
@@ -506,11 +528,12 @@ srl_dump_classname(pTHX_ srl_encoder_t *enc, SV *src)
 }
 
 
-void
-srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
+/* Prepare encoder for encoding: Clone if already in use since
+ * encoders aren't "reentrant". Set as in use and register cleanup
+ * routine with Perl. */
+SRL_STATIC_INLINE srl_encoder_t *
+srl_prepare_encoder(pTHX_ srl_encoder_t *enc)
 {
-    if (DEBUGHACK) warn("== start dump");
-
     /* Check whether encoder is in use and create a new one on the
      * fly if necessary. Should only happen in bizarre edge cases... hopefully. */
     if (SRL_ENC_HAVE_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY)) {
@@ -524,6 +547,56 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
     /* Register our structure for destruction on scope exit */
     SAVEDESTRUCTOR_X(&srl_destructor_hook, (void *)enc);
 
+    return enc;
+}
+
+
+/* Update a varint anywhere in the output stream with defined start and end
+ * positions. This can produce non-canonical varints and is useful for filling
+ * pre-allocated varints. */
+SRL_STATIC_INLINE void
+srl_update_varint_from_to(pTHX_ char *varint_start, char *varint_end, UV number)
+{
+    while (number >= 0x80) {                      /* while we are larger than 7 bits long */
+        *varint_start++ = (number & 0x7f) | 0x80; /* write out the least significant 7 bits, set the high bit */
+        number = number >> 7;                     /* shift off the 7 least significant bits */
+    }
+    /* if it is the same size we can use a canonical varint */
+    if ( varint_start == varint_end ) {
+        *varint_start = number;                   /* encode the last 7 bits without the high bit being set */
+    } else {
+        /* if not we produce a non-canonical varint, basically we stuff
+         * 0 bits (via 0x80) into the "tail" of the varint, until we can
+         * stick in a null to terminate the sequence. This means that the
+         * varint is effectively "self-padding", and we only need special
+         * logic in the encoder - a decoder will happily process a non-canonical
+         * varint with no problem */
+        *varint_start++ = (number & 0x7f) | 0x80;
+        while ( varint_start < varint_end )
+            *varint_start++ = 0x80;
+        *varint_start= 0;
+    }
+}
+
+
+/* Resets the Snappy-compression header flag to OFF.
+ * Obviously requires that a Sereal header was already written to the
+ * encoder's output buffer. */
+SRL_STATIC_INLINE void
+srl_reset_snappy_header_flag(srl_encoder_t *enc)
+{
+    /* sizeof(const char *) includes a count of \0 */
+    char *flags_and_version_byte = enc->buf_start + sizeof(SRL_MAGIC_STRING) - 1;
+    /* disable snappy flag in header */
+    *flags_and_version_byte = SRL_PROTOCOL_ENCODING_RAW |
+                              (*flags_and_version_byte & SRL_PROTOCOL_VERSION_MASK);
+}
+
+void
+srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
+{
+    enc = srl_prepare_encoder(aTHX_ enc);
+
     if (!SRL_ENC_HAVE_OPTION(enc, (SRL_F_COMPRESS_SNAPPY | SRL_F_COMPRESS_SNAPPY_INCREMENTAL))) {
         srl_write_header(aTHX_ enc);
         srl_dump_sv(aTHX_ enc, src);
@@ -536,23 +609,19 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
         /* Alas, have to write entire packet first since the header length
          * will determine offsets. */
         srl_write_header(aTHX_ enc);
-        sereal_header_len = enc->pos - enc->buf_start;
+        sereal_header_len = BUF_POS_OFS(enc);
         srl_dump_sv(aTHX_ enc, src);
         srl_fixup_weakrefs(aTHX_ enc);
         assert(BUF_POS_OFS(enc) > sereal_header_len);
         uncompressed_body_length = BUF_POS_OFS(enc) - sereal_header_len;
 
-        /* Don't bother with snappy compression at all if we have less than $threshold bytes of payload */
         if (enc->snappy_threshold > 0
             && uncompressed_body_length < (STRLEN)enc->snappy_threshold)
         {
-            /* sizeof(const char *) includes a count of \0 */
-            char *flags_and_version_byte = enc->buf_start + sizeof(SRL_MAGIC_STRING) - 1;
-            /* disable snappy flag in header */
-            *flags_and_version_byte = SRL_PROTOCOL_ENCODING_RAW |
-                                      (*flags_and_version_byte & SRL_PROTOCOL_VERSION_MASK);
+            /* Don't bother with snappy compression at all if we have less than $threshold bytes of payload */
+            srl_reset_snappy_header_flag(enc);
         }
-        else {
+        else { /* do snappy compression of body */
             char *old_buf;
             char *varint_start= NULL;
             char *varint_end;
@@ -561,17 +630,11 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
             /* Get uncompressed payload and total packet output (after compression) lengths */
             dest_len = csnappy_max_compressed_length(uncompressed_body_length) + sereal_header_len + 1;
 
-            if ( SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL ) ) {
+            /* Will have to embed compressed packet length as varint if in incremental mode */
+            if ( SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL ) )
                 dest_len += SRL_MAX_VARINT_LENGTH;
-            }
 
-            /* Lazy working buffer alloc */
-            if (expect_false( enc->snappy_workmem == NULL )) {
-                /* Cleaned up automatically by the cleanup handler */
-                Newx(enc->snappy_workmem, CSNAPPY_WORKMEM_BYTES, char);
-                if (enc->snappy_workmem == NULL)
-                    croak("Out of memory!");
-            }
+            srl_init_snappy_workmem(aTHX_ enc);
 
             /* Back up old buffer and allocate new one with correct size */
             old_buf = enc->buf_start;
@@ -587,72 +650,32 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
             Copy(old_buf, enc->pos, sereal_header_len, char);
             enc->pos += sereal_header_len;
 
+            /* Embed compressed packet length */
             if ( SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL ) ) {
                 varint_start= enc->pos;
                 srl_buf_cat_varint_nocheck(aTHX_ enc, 0, dest_len);
                 varint_end= enc->pos - 1;
             }
 
-            /*
-             * fprintf(stderr, "'%u' %u %u\n", enc->pos - enc->buf_start, uncompressed_body_length, (uncompressed_body_length+sereal_header_len));
-             * fprintf(stdout, "%7s!%1s\n", old_buf, old_buf+6);
-             */
             csnappy_compress(old_buf+sereal_header_len, (uint32_t)uncompressed_body_length, enc->pos, &dest_len,
                              enc->snappy_workmem, CSNAPPY_WORKMEM_BYTES_POWER_OF_TWO);
-
-            if ( varint_start ) {
-                /* overwrite the max size varint with the real size of the compressed data */
-                UV n= dest_len;
-                while (n >= 0x80) {                      /* while we are larger than 7 bits long */
-                    *varint_start++ = (n & 0x7f) | 0x80; /* write out the least significant 7 bits, set the high bit */
-                    n = n >> 7;                          /* shift off the 7 least significant bits */
-                }
-                /* if it is the same size we can use a canonical varint */
-                if ( varint_start == varint_end ) {
-                    *varint_start = n;                     /* encode the last 7 bits without the high bit being set */
-                } else {
-                    /* if not we produce a non-canonical varint, basically we stuff
-                     * 0 bits (via 0x80) into the "tail" of the varint, until we can
-                     * stick in a null to terminate the sequence. This means that the
-                     * varint is effectively "self-padding", and we only need special
-                     * logic in the encoder - a decoder will happily process a non-canonical
-                     * varint with no problem */
-                    *varint_start++ = (n & 0x7f) | 0x80;
-                    while ( varint_start < varint_end )
-                        *varint_start++ = 0x80;
-                    *varint_start= 0;
-                }
-            }
-
-            /* fprintf(stderr, "%u, %u %u %u\n", dest_len, enc->pos[0], enc->pos[1], enc->pos[2]); */
             assert(dest_len != 0);
+
+            /* overwrite the max size varint with the real size of the compressed data */
+            if (varint_start)
+                srl_update_varint_from_to(aTHX_ varint_start, varint_end, dest_len);
+
             Safefree(old_buf);
             enc->pos += dest_len;
             assert(enc->pos <= enc->buf_end);
 
-#if 0
-            if (expect_false( dest_len >= uncompressed_length )) {
-                /* FAIL. Swap old buffer back. Unset Snappy option */
-                char *compressed_buf = enc->buf_start;
-                char *flags_and_version_byte;
-                enc->buf_start = old_buf;
-                enc->pos = old_buf + sereal_header_len + uncompressed_length;
-                /* disable snappy flag in header */
-                flags_and_version_byte = enc->buf_start + sizeof(SRL_MAGIC_STRING) - 1;
-                flags_and_version_byte = SRL_PROTOCOL_ENCODING_RAW |
-                                      (flags_and_version_byte & SRL_PROTOCOL_VERSION_MASK);
-            }
-            else {
-                Safefree(old_buf);
-                enc->pos += dest_len;
-#endif
-        }
-    }
+            /* TODO If compression didn't help, swap back to old, uncompressed buffer */
+        } /* end of "actually do snappy compression" */
+    } /* end of "want snappy compression?" */
 
     /* NOT doing a
      *   SRL_ENC_RESET_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY);
      * here because we're relying on the SAVEDESTRUCTOR_X call. */
-    if (DEBUGHACK) warn("== end dump");
 }
 
 SRL_STATIC_INLINE void
@@ -1008,15 +1031,19 @@ srl_dump_svpv(pTHX_ srl_encoder_t *enc, SV *src)
         if (!dupe_offset_he) {
             croak("out of memory (hv_fetch_ent returned NULL)");
         } else {
+            const char out_tag= SRL_ENC_HAVE_OPTION(enc, SRL_F_ALIASED_DEDUPE_STRINGS)
+                                ? SRL_HDR_ALIAS
+                                : SRL_HDR_COPY;
             SV *ofs_sv= HeVAL(dupe_offset_he);
             if (SvIOK(ofs_sv)) {
-                /* emit copy */
-                srl_buf_cat_varint(aTHX_ enc, SRL_HDR_COPY, SvIV(ofs_sv));
+                /* emit copy or alias */
+                srl_buf_cat_varint(aTHX_ enc, out_tag, SvIV(ofs_sv));
                 return;
             } else if (SvUOK(ofs_sv)) {
-                srl_buf_cat_varint(aTHX_ enc, SRL_HDR_COPY, SvUV(ofs_sv));
+                srl_buf_cat_varint(aTHX_ enc, out_tag, SvUV(ofs_sv));
                 return;
             } else {
+                /* start tracking this string */
                 sv_setuv(ofs_sv, (UV)BUF_POS_OFS(enc));
             }
         }
