@@ -366,7 +366,7 @@ constant_16 (pTHX_ const char *name, IV *iv_return) {
   /* When generated this function returned values for the list of names given
      here.  However, subsequent manual editing may have added or removed some.
      SRL_HDR_ARRAYREF SRL_HDR_NEG_HIGH SRL_HDR_POS_HIGH SRL_HDR_RESERVED
-     SRL_HDR_STR_UTF8 SRL_NEG_MIN_SIZE SRL_POS_MAX_SIZE */
+     SRL_HDR_STR_UTF8 SRL_MAGIC_STRLEN SRL_NEG_MIN_SIZE SRL_POS_MAX_SIZE */
   /* Offset 8 gives the best switch position.  */
   switch (name[8]) {
   case 'A':
@@ -374,6 +374,17 @@ constant_16 (pTHX_ const char *name, IV *iv_return) {
     /*                       ^              */
 #ifdef SRL_HDR_ARRAYREF
       *iv_return = SRL_HDR_ARRAYREF;
+      return PERL_constant_ISIV;
+#else
+      return PERL_constant_NOTDEF;
+#endif
+    }
+    break;
+  case 'C':
+    if (memEQ(name, "SRL_MAGIC_STRLEN", 16)) {
+    /*                       ^              */
+#ifdef SRL_MAGIC_STRLEN
+      *iv_return = SRL_MAGIC_STRLEN;
       return PERL_constant_ISIV;
 #else
       return PERL_constant_NOTDEF;
@@ -623,7 +634,7 @@ my @names = (qw(SRL_HDR_ALIAS SRL_HDR_ARRAY SRL_HDR_ARRAYREF
 	       SRL_HDR_SHORT_BINARY SRL_HDR_SHORT_BINARY_HIGH
 	       SRL_HDR_SHORT_BINARY_LOW SRL_HDR_STR_UTF8 SRL_HDR_TRACK_FLAG
 	       SRL_HDR_TRUE SRL_HDR_UNDEF SRL_HDR_VARINT SRL_HDR_WEAKEN
-	       SRL_HDR_ZIGZAG SRL_MAGIC_STRING_LILIPUTIAN
+	       SRL_HDR_ZIGZAG SRL_MAGIC_STRING_LILIPUTIAN SRL_MAGIC_STRLEN
 	       SRL_MASK_ARRAYREF_COUNT SRL_MASK_HASHREF_COUNT
 	       SRL_MASK_SHORT_BINARY_LEN SRL_NEG_MIN_SIZE SRL_POS_MAX_SIZE
 	       SRL_PROTOCOL_ENCODING_MASK SRL_PROTOCOL_ENCODING_RAW

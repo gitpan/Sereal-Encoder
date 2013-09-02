@@ -5,7 +5,7 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '0.36'; # Don't forget to update the TestCompat set for testing against installed decoders!
+our $VERSION = '0.37'; # Don't forget to update the TestCompat set for testing against installed decoders!
 
 # not for public consumption, just for testing.
 my $TestCompat = [ map sprintf("%.2f", $_/100), reverse( 23 .. int($VERSION * 100) ) ]; # compat with 0.23 to ...
@@ -41,9 +41,6 @@ Sereal::Encoder - Fast, compact, powerful binary serialization
   $out = encode_sereal($structure, {... options ...});
 
 =head1 DESCRIPTION
-
-B<This is an experimental module. The interface may change without notice.
-Before using it in production, please get in touch with the authors!>
 
 This library implements an efficient, compact-output, and feature-rich
 serializer using a binary protocol called I<Sereal>.
