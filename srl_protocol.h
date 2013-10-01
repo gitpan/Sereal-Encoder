@@ -144,7 +144,7 @@
 #define SRL_MAGIC_STRLEN                4               /* Length of SRL_MAGIC_STRING */
 #define SRL_MAGIC_STRING_LILIPUTIAN     0x6c72733d      /* SRL_MAGIC_STRING as a little endian integer */
 
-#define SRL_PROTOCOL_VERSION            ( 1 )           /* this is the first. for some reason we did not use 0 */
+#define SRL_PROTOCOL_VERSION            ( 2 )
 #define SRL_PROTOCOL_VERSION_BITS       ( 4 )           /* how many bits we use for the version, the rest go to the encoding */
 #define SRL_PROTOCOL_VERSION_MASK       ( ( 1 << SRL_PROTOCOL_VERSION_BITS ) - 1 )
 
@@ -153,7 +153,9 @@
 #define SRL_PROTOCOL_ENCODING_SNAPPY    ( 1 << SRL_PROTOCOL_VERSION_BITS )
 #define SRL_PROTOCOL_ENCODING_SNAPPY_INCREMENTAL    ( 2 << SRL_PROTOCOL_VERSION_BITS )
 
-
+/* Bits in the header bitfield */
+#define SRL_PROTOCOL_HDR_USER_DATA      ( 1 )
+#define SRL_PROTOCOL_HDR_CONTINUE       ( 8 ) /* TODO Describe in spec - not urgent since not meaningful yet */
 
 /* Useful constants */
 /* See also range constants below for the header byte */

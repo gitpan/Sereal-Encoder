@@ -11,24 +11,25 @@
 #   define INITIALIZATION_SIZE 64
 #endif
 
+#include "srl_buffer_types.h"
+
 typedef struct PTABLE * ptable_ptr;
 typedef struct {
-    char *buf_start;         /* ptr to "physical" start of output buffer */
-    char *buf_end;           /* ptr to end of output buffer */
-    char *pos;               /* ptr to current position within output buffer */
+    srl_buffer_t buf;
+    srl_buffer_t tmp_buf;     /* temporary buffer for swapping */
 
-    U32 operational_flags;   /* flags that pertain to one encode run (rather than being options): See SRL_OF_* defines */
-    U32 flags;               /* flag-like options: See SRL_F_* defines */
-    UV max_recursion_depth;  /* Configurable limit on the number of recursive calls we're willing to make */
+    U32 operational_flags;    /* flags that pertain to one encode run (rather than being options): See SRL_OF_* defines */
+    U32 flags;                /* flag-like options: See SRL_F_* defines */
+    UV max_recursion_depth;   /* Configurable limit on the number of recursive calls we're willing to make */
 
-    UV recursion_depth;      /* current Perl-ref recursion depth */
+    UV recursion_depth;       /* current Perl-ref recursion depth */
     ptable_ptr ref_seenhash;  /* ptr table for avoiding circular refs */
     ptable_ptr weak_seenhash; /* ptr table for avoiding dangling weakrefs */
     ptable_ptr str_seenhash;  /* ptr table for issuing COPY commands based on PTRS (used for classnames and keys) */
     HV *string_deduper_hv;    /* track strings we have seen before, by content */
 
-    void *snappy_workmem;    /* lazily allocated if and only if using Snappy */
-    IV snappy_threshold;     /* do not compress things smaller than this even if Snappy enabled */
+    void *snappy_workmem;     /* lazily allocated if and only if using Snappy */
+    IV snappy_threshold;      /* do not compress things smaller than this even if Snappy enabled */
 } srl_encoder_t;
 
 /* constructor from options */
@@ -42,9 +43,9 @@ void srl_clear_encoder(pTHX_ srl_encoder_t *enc);
 void srl_destroy_encoder(pTHX_ srl_encoder_t *enc);
 
 /* Write Sereal packet header to output buffer */
-void srl_write_header(pTHX_ srl_encoder_t *enc);
+void srl_write_header(pTHX_ srl_encoder_t *enc, SV *user_header_src);
 /* Start dumping a top-level SV */
-void srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src);
+void srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src, SV *user_header_src);
 
 
 /* define option bits in srl_encoder_t's flags member */
@@ -94,6 +95,9 @@ void srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src);
 /* If set in flags, then we serialize objects without class information.
  * Corresponds to the 'no_bless_objects' flag found in the Decoder. */
 #define SRL_F_NO_BLESS_OBJECTS                0x01000UL
+
+/* If set in flags, then we serialize using Sereal protocol version 1. */
+#define SRL_F_USE_PROTO_V1                    0x02000UL
 
 /* Set while the encoder is in active use / dirty */
 #define SRL_OF_ENCODER_DIRTY                 1UL

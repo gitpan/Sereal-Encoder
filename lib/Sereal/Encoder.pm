@@ -5,14 +5,15 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '0.37'; # Don't forget to update the TestCompat set for testing against installed decoders!
+our $VERSION = '2.00_01'; # Don't forget to update the TestCompat set for testing against installed decoders!
 
 # not for public consumption, just for testing.
-my $TestCompat = [ map sprintf("%.2f", $_/100), reverse( 23 .. int($VERSION * 100) ) ]; # compat with 0.23 to ...
+(my $num_version = $VERSION) =~ s/_//;
+my $TestCompat = [ map sprintf("%.2f", $_/100), reverse( 200 .. int($num_version * 100) ) ]; # compat with 2.00 to ...
 sub _test_compat {return(@$TestCompat, $VERSION)}
 
 use Exporter 'import';
-our @EXPORT_OK = qw(encode_sereal);
+our @EXPORT_OK = qw(encode_sereal encode_sereal_with_header_data);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 # export by default if run from command line
 our @EXPORT = ((caller())[1] eq '-e' ? @EXPORT_OK : ());
@@ -48,7 +49,7 @@ Its sister module L<Sereal::Decoder> implements a decoder for this format.
 The two are released separately to allow for independent and safer upgrading.
 
 The Sereal protocol version emitted by this encoder implementation is currently
-protocol version 1.
+protocol version 2 by default.
 
 The protocol specification and many other bits of documentation
 can be found in the github repository. Right now, the specification is at
@@ -88,13 +89,18 @@ If in doubt, test with your data whether this helps or not.
 The decoder (version 0.04 and up) will know how to handle Snappy-compressed
 Sereal documents transparently.
 
-B<NOTE 1:> Do not use this if you want to parse multiple Sereal packets
-from the same buffer. Instead use C<snappy_incr> instead.
+B<Note:> The C<snappy_incr> and C<snappy> options are identical in
+Sereal protocol V2 (the default). If using the C<use_protocol_v1> option
+to emit Sereal V1 documents, this emits non-incrementally decodable
+documents. See C<snappy_incr> in those cases.
 
 =head3 snappy_incr
 
-Enables a version of the snappy protocol which is suitable for incremental
-parsing of packets. See also the C<snappy> option above for more details.
+Same as the C<snappy> option for default (Sereal V2) operation.
+
+In Sereal V1, enables a version of the snappy protocol which is suitable for
+incremental parsing of packets. See also the C<snappy> option above for
+more details.
 
 =head3 snappy_threshold
 
@@ -102,6 +108,8 @@ The size threshold (in bytes) of the uncompressed output below which
 snappy compression is not even attempted even if enabled.
 Defaults to one kilobyte (1024 bytes). Set to 0 and C<snappy> to enabled
 to always compress.
+Note that the document will not be compressed if the resulting size
+will be bigger than the original size (even if snappy_threshold is 0).
 
 =head3 croak_on_bless
 
@@ -226,8 +234,14 @@ when decoding. The upshot is that with this option, the application
 using (decoding) the data may save a lot of memory in some situations
 but at the cost of potential action at a distance due to the aliasing.
 
-Beware: The test suite currently does not cover this option as well as it
+I<Beware:> The test suite currently does not cover this option as well as it
 probably should. Patches welcome.
+
+=head3 use_protocol_v1
+
+If set, the encoder will emit Sereal documents following protocol version 1.
+This is strongly discouraged except for temporary
+compatibility/migration purposes.
 
 =head1 INSTANCE METHODS
 
@@ -353,7 +367,20 @@ which is simply serializing a cache key, and thus there's little harm in an
 occasional false-negative, but think carefully before applying Sereal in other
 use-cases.
 
-=head1 AUTHOR
+=head1 BUGS, CONTACT AND SUPPORT
+
+For reporting bugs, please use the github bug tracker at
+L<http://github.com/Sereal/Sereal/issues>.
+
+For support and discussion of Sereal, there are two Google Groups:
+
+Announcements around Sereal (extremely low volume):
+L<https://groups.google.com/forum/?fromgroups#!forum/sereal-announce>
+
+Sereal development list:
+L<https://groups.google.com/forum/?fromgroups#!forum/sereal-dev>
+
+=head1 AUTHORS
 
 Yves Orton E<lt>demerphq@gmail.comE<gt>
 

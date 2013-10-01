@@ -542,10 +542,21 @@ constant_25 (pTHX_ const char *name, IV *iv_return) {
   /* When generated this function returned values for the list of names given
      here.  However, subsequent manual editing may have added or removed some.
      SRL_HDR_SHORT_BINARY_HIGH SRL_MASK_SHORT_BINARY_LEN
-     SRL_PROTOCOL_ENCODING_RAW SRL_PROTOCOL_VERSION_BITS
-     SRL_PROTOCOL_VERSION_MASK */
+     SRL_PROTOCOL_ENCODING_RAW SRL_PROTOCOL_HDR_CONTINUE
+     SRL_PROTOCOL_VERSION_BITS SRL_PROTOCOL_VERSION_MASK */
   /* Offset 24 gives the best switch position.  */
   switch (name[24]) {
+  case 'E':
+    if (memEQ(name, "SRL_PROTOCOL_HDR_CONTINU", 24)) {
+    /*                                       E      */
+#ifdef SRL_PROTOCOL_HDR_CONTINUE
+      *iv_return = SRL_PROTOCOL_HDR_CONTINUE;
+      return PERL_constant_ISIV;
+#else
+      return PERL_constant_NOTDEF;
+#endif
+    }
+    break;
   case 'H':
     if (memEQ(name, "SRL_HDR_SHORT_BINARY_HIG", 24)) {
     /*                                       H      */
@@ -639,8 +650,10 @@ my @names = (qw(SRL_HDR_ALIAS SRL_HDR_ARRAY SRL_HDR_ARRAYREF
 	       SRL_MASK_SHORT_BINARY_LEN SRL_NEG_MIN_SIZE SRL_POS_MAX_SIZE
 	       SRL_PROTOCOL_ENCODING_MASK SRL_PROTOCOL_ENCODING_RAW
 	       SRL_PROTOCOL_ENCODING_SNAPPY
-	       SRL_PROTOCOL_ENCODING_SNAPPY_INCREMENTAL SRL_PROTOCOL_VERSION
-	       SRL_PROTOCOL_VERSION_BITS SRL_PROTOCOL_VERSION_MASK));
+	       SRL_PROTOCOL_ENCODING_SNAPPY_INCREMENTAL
+	       SRL_PROTOCOL_HDR_CONTINUE SRL_PROTOCOL_HDR_USER_DATA
+	       SRL_PROTOCOL_VERSION SRL_PROTOCOL_VERSION_BITS
+	       SRL_PROTOCOL_VERSION_MASK));
 
 print constant_types(), "\n"; # macro defs
 foreach (C_constant ("Sereal::Encoder::Constants", 'constant', 'IV', $types, undef, 3, @names) ) {
@@ -775,13 +788,32 @@ __END__
     return constant_25 (aTHX_ name, iv_return);
     break;
   case 26:
-    if (memEQ(name, "SRL_PROTOCOL_ENCODING_MASK", 26)) {
+    /* Names all of length 26.  */
+    /* SRL_PROTOCOL_ENCODING_MASK SRL_PROTOCOL_HDR_USER_DATA */
+    /* Offset 24 gives the best switch position.  */
+    switch (name[24]) {
+    case 'S':
+      if (memEQ(name, "SRL_PROTOCOL_ENCODING_MASK", 26)) {
+      /*                                       ^        */
 #ifdef SRL_PROTOCOL_ENCODING_MASK
-      *iv_return = SRL_PROTOCOL_ENCODING_MASK;
-      return PERL_constant_ISIV;
+        *iv_return = SRL_PROTOCOL_ENCODING_MASK;
+        return PERL_constant_ISIV;
 #else
-      return PERL_constant_NOTDEF;
+        return PERL_constant_NOTDEF;
 #endif
+      }
+      break;
+    case 'T':
+      if (memEQ(name, "SRL_PROTOCOL_HDR_USER_DATA", 26)) {
+      /*                                       ^        */
+#ifdef SRL_PROTOCOL_HDR_USER_DATA
+        *iv_return = SRL_PROTOCOL_HDR_USER_DATA;
+        return PERL_constant_ISIV;
+#else
+        return PERL_constant_NOTDEF;
+#endif
+      }
+      break;
     }
     break;
   case 27:

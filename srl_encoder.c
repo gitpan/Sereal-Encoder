@@ -82,6 +82,7 @@ extern "C" {
 #define DEBUGHACK 0
 
 /* some static function declarations */
+SRL_STATIC_INLINE void srl_clear_seen_hashes(pTHX_ srl_encoder_t *enc);
 static void srl_dump_sv(pTHX_ srl_encoder_t *enc, SV *src);
 SRL_STATIC_INLINE void srl_dump_svpv(pTHX_ srl_encoder_t *enc, SV *src);
 SRL_STATIC_INLINE void srl_dump_pv(pTHX_ srl_encoder_t *enc, const char* src, STRLEN src_len, int is_utf8);
@@ -143,8 +144,6 @@ SRL_STATIC_INLINE HV *srl_init_string_deduper_hv(pTHX_ srl_encoder_t *enc);
     }                                                                   \
 } STMT_END
 
-
-
 /* This is fired when we exit the Perl pseudo-block.
  * It frees our encoder and all. Put encoder-level cleanup
  * logic here so that we can simply use croak/longjmp for
@@ -165,14 +164,9 @@ srl_destructor_hook(pTHX_ void *p)
     }
 }
 
-void
-srl_clear_encoder(pTHX_ srl_encoder_t *enc)
+SRL_STATIC_INLINE void
+srl_clear_seen_hashes(pTHX_ srl_encoder_t *enc)
 {
-    if (!SRL_ENC_HAVE_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY)) {
-        warn("Sereal Encoder being cleared but in virgin state. That is unexpected.");
-    }
-
-    enc->recursion_depth = 0;
     if (enc->ref_seenhash != NULL)
         PTABLE_clear(enc->ref_seenhash);
     if (enc->str_seenhash != NULL)
@@ -181,7 +175,23 @@ srl_clear_encoder(pTHX_ srl_encoder_t *enc)
         PTABLE_clear(enc->weak_seenhash);
     if (enc->string_deduper_hv != NULL)
         hv_clear(enc->string_deduper_hv);
-    enc->pos = enc->buf_start;
+}
+
+void
+srl_clear_encoder(pTHX_ srl_encoder_t *enc)
+{
+    if (!SRL_ENC_HAVE_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY)) {
+        warn("Sereal Encoder being cleared but in virgin state. That is unexpected.");
+    }
+
+    enc->recursion_depth = 0;
+    srl_clear_seen_hashes(aTHX_ enc);
+
+    enc->buf.pos = enc->buf.start;
+    if (enc->tmp_buf.start != NULL)
+        enc->tmp_buf.pos = enc->tmp_buf.start;
+
+    SRL_SET_BODY_POS(enc, enc->buf.start);
 
     SRL_ENC_RESET_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY);
 }
@@ -189,7 +199,12 @@ srl_clear_encoder(pTHX_ srl_encoder_t *enc)
 void
 srl_destroy_encoder(pTHX_ srl_encoder_t *enc)
 {
-    Safefree(enc->buf_start);
+    srl_buf_free_buffer(aTHX_ &enc->buf);
+
+    /* Free tmp buffer only if it was allocated at all. */
+    if (enc->tmp_buf.start != NULL)
+        srl_buf_free_buffer(aTHX_ &enc->tmp_buf);
+
     Safefree(enc->snappy_workmem);
     if (enc->ref_seenhash != NULL)
         PTABLE_free(enc->ref_seenhash);
@@ -211,14 +226,16 @@ srl_empty_encoder_struct(pTHX)
     if (enc == NULL)
         croak("Out of memory");
 
-    /* Init struct */
-    Newx(enc->buf_start, INITIALIZATION_SIZE, char);
-    if (enc->buf_start == NULL) {
+    /* Init buffer struct */
+    if (expect_false( srl_buf_init_buffer(aTHX_ &(enc->buf), INITIALIZATION_SIZE) != 0 )) {
         Safefree(enc);
         croak("Out of memory");
     }
-    enc->buf_end = enc->buf_start + INITIALIZATION_SIZE - 1;
-    enc->pos = enc->buf_start;
+
+    /* Set the tmp buffer struct's char buffer to NULL so we don't free
+     * something nasty if it's unused. */
+    enc->tmp_buf.start = NULL;
+
     enc->recursion_depth = 0;
     enc->max_recursion_depth = DEFAULT_MAX_RECUR_DEPTH;
     enc->operational_flags = 0;
@@ -246,11 +263,16 @@ srl_build_encoder_struct(pTHX_ HV *opt)
     /* load options */
     if (opt != NULL) {
         int undef_unknown = 0;
-        int snappy = 0;
+        int snappy_nonincr = 0;
         /* SRL_F_SHARED_HASHKEYS on by default */
         svp = hv_fetchs(opt, "no_shared_hashkeys", 0);
         if ( !svp || !SvTRUE(*svp) )
             SRL_ENC_SET_OPTION(enc, SRL_F_SHARED_HASHKEYS);
+
+        /* Needs to be before the snappy options */
+        svp = hv_fetchs(opt, "use_protocol_v1", 0);
+        if ( svp && SvTRUE(*svp) )
+            SRL_ENC_SET_OPTION(enc, SRL_F_USE_PROTO_V1);
 
         svp = hv_fetchs(opt, "croak_on_bless", 0);
         if ( svp && SvTRUE(*svp) )
@@ -262,13 +284,18 @@ srl_build_encoder_struct(pTHX_ HV *opt)
 
         svp = hv_fetchs(opt, "snappy", 0);
         if ( svp && SvTRUE(*svp) ) {
-            snappy = 1;
-            SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY);
+            /* incremental is the new black in V2 */
+            if (expect_true( !SRL_ENC_HAVE_OPTION(enc, SRL_F_USE_PROTO_V1) ))
+                SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL);
+            else {
+                snappy_nonincr = 1;
+                SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY);
+            }
         }
 
         svp = hv_fetchs(opt, "snappy_incr", 0);
         if ( svp && SvTRUE(*svp) ) {
-            if (snappy)
+            if (snappy_nonincr)
                 croak("'snappy' and 'snappy_incr' options are mutually exclusive");
             SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL);
         }
@@ -380,10 +407,10 @@ srl_init_snappy_workmem(pTHX_ srl_encoder_t *enc)
 
 
 void
-srl_write_header(pTHX_ srl_encoder_t *enc)
+srl_write_header(pTHX_ srl_encoder_t *enc, SV *user_header_src)
 {
     /* 4th to 8th bit are flags. Using 4th for snappy flag. FIXME needs to go in spec. */
-    const U8 version_and_flags = SRL_PROTOCOL_VERSION
+    const U8 version_and_flags = (SRL_ENC_HAVE_OPTION(enc, SRL_F_USE_PROTO_V1) ? 1 : SRL_PROTOCOL_VERSION)
                                  | (
                                     SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY)
                                     ? SRL_PROTOCOL_ENCODING_SNAPPY
@@ -398,7 +425,43 @@ srl_write_header(pTHX_ srl_encoder_t *enc)
     BUF_SIZE_ASSERT(enc, sizeof(SRL_MAGIC_STRING) + 1 + 1);
     srl_buf_cat_str_s_nocheck(enc, SRL_MAGIC_STRING);
     srl_buf_cat_char_nocheck(enc, version_and_flags);
-    srl_buf_cat_char_nocheck(enc, '\0'); /* variable header length (0 right now) */
+    if (user_header_src == NULL) {
+        srl_buf_cat_char_nocheck(enc, '\0'); /* variable header length (0 right now) */
+    }
+    else {
+        STRLEN user_data_len;
+
+        if (expect_false( SRL_ENC_HAVE_OPTION(enc, SRL_F_USE_PROTO_V1) ))
+            croak("Cannot serialize user header data in Sereal protocol V1 mode!");
+
+        /* Allocate tmp buffer for swapping if necessary,
+         * will be cleaned up automatically */
+        if (enc->tmp_buf.start == NULL)
+            srl_buf_init_buffer(aTHX_ &enc->tmp_buf, INITIALIZATION_SIZE);
+
+        /* Write document body (for header) into separate buffer */
+        srl_buf_swap_buffer(aTHX_ &enc->tmp_buf, &enc->buf);
+        SRL_UPDATE_BODY_POS(enc);
+        srl_dump_sv(aTHX_ enc, user_header_src);
+        srl_fixup_weakrefs(aTHX_ enc); /* more bodies to follow */
+        srl_clear_seen_hashes(aTHX_ enc); /* more bodies to follow */
+
+        /* Swap main buffer back in, encode header length&bitfield, copy user header data */
+        user_data_len = BUF_POS_OFS(enc->buf);
+        srl_buf_swap_buffer(aTHX_ &enc->buf, &enc->tmp_buf);
+
+        BUF_SIZE_ASSERT(enc, user_data_len + 1 + SRL_MAX_VARINT_LENGTH); /* +1 for bit field, +X for header len */
+
+        /* Encode header length */
+        srl_buf_cat_varint_nocheck(aTHX_ enc, 0, (UV)(user_data_len + 1)); /* +1 for bit field */
+        /* Encode bitfield */
+        srl_buf_cat_char_nocheck(enc, '\1');
+        /* Copy user header data */
+        Copy(enc->tmp_buf.start, enc->buf.pos, user_data_len, char);
+        enc->buf.pos += user_data_len;
+
+        enc->tmp_buf.pos = enc->tmp_buf.start; /* reset tmp buffer just to be clean */
+    }
 }
 
 /* The following is to handle the fact that under normal build options
@@ -439,18 +502,18 @@ srl_dump_nv(pTHX_ srl_encoder_t *enc, SV *src)
     if ( f == nv || nv != nv ) {
         BUF_SIZE_ASSERT(enc, 1 + sizeof(f)); /* heuristic: header + string + simple value */
         srl_buf_cat_char_nocheck(enc,SRL_HDR_FLOAT);
-        Copy((char *)&f, enc->pos, sizeof(f), char);
-        enc->pos += sizeof(f);
+        Copy((char *)&f, enc->buf.pos, sizeof(f), char);
+        enc->buf.pos += sizeof(f);
     } else if (d == nv) {
         BUF_SIZE_ASSERT(enc, 1 + sizeof(d)); /* heuristic: header + string + simple value */
         srl_buf_cat_char_nocheck(enc,SRL_HDR_DOUBLE);
-        Copy((char *)&d, enc->pos, sizeof(d), char);
-        enc->pos += sizeof(d);
+        Copy((char *)&d, enc->buf.pos, sizeof(d), char);
+        enc->buf.pos += sizeof(d);
     } else {
         BUF_SIZE_ASSERT(enc, 1 + sizeof(nv)); /* heuristic: header + string + simple value */
         srl_buf_cat_char_nocheck(enc,SRL_HDR_LONG_DOUBLE);
-        Copy((char *)&nv, enc->pos, sizeof(nv), char);
-        enc->pos += sizeof(nv);
+        Copy((char *)&nv, enc->buf.pos, sizeof(nv), char);
+        enc->buf.pos += sizeof(nv);
     }
 }
 
@@ -518,7 +581,7 @@ srl_dump_classname(pTHX_ srl_encoder_t *enc, SV *src)
         srl_buf_cat_char(enc, SRL_HDR_OBJECT);
 
         /* remember current offset before advancing it */
-        PTABLE_store(string_seenhash, (void *)stash, (void *)(enc->pos - enc->buf_start));
+        PTABLE_store(string_seenhash, (void *)stash, (void *)BODY_POS_OFS(enc->buf));
 
         /* HvNAMEUTF8 not in older perls and it would be 0 for those anyway */
 #if PERL_VERSION >= 16
@@ -588,19 +651,20 @@ SRL_STATIC_INLINE void
 srl_reset_snappy_header_flag(srl_encoder_t *enc)
 {
     /* sizeof(const char *) includes a count of \0 */
-    char *flags_and_version_byte = enc->buf_start + sizeof(SRL_MAGIC_STRING) - 1;
+    char *flags_and_version_byte = enc->buf.start + sizeof(SRL_MAGIC_STRING) - 1;
     /* disable snappy flag in header */
     *flags_and_version_byte = SRL_PROTOCOL_ENCODING_RAW |
                               (*flags_and_version_byte & SRL_PROTOCOL_VERSION_MASK);
 }
 
 void
-srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
+srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src, SV *user_header_src)
 {
     enc = srl_prepare_encoder(aTHX_ enc);
 
-    if (!SRL_ENC_HAVE_OPTION(enc, (SRL_F_COMPRESS_SNAPPY | SRL_F_COMPRESS_SNAPPY_INCREMENTAL))) {
-        srl_write_header(aTHX_ enc);
+    if (expect_true( !SRL_ENC_HAVE_OPTION(enc, (SRL_F_COMPRESS_SNAPPY | SRL_F_COMPRESS_SNAPPY_INCREMENTAL)) )) {
+        srl_write_header(aTHX_ enc, user_header_src);
+        SRL_UPDATE_BODY_POS(enc);
         srl_dump_sv(aTHX_ enc, src);
         srl_fixup_weakrefs(aTHX_ enc);
     }
@@ -610,12 +674,13 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
 
         /* Alas, have to write entire packet first since the header length
          * will determine offsets. */
-        srl_write_header(aTHX_ enc);
-        sereal_header_len = BUF_POS_OFS(enc);
+        srl_write_header(aTHX_ enc, user_header_src);
+        sereal_header_len = BUF_POS_OFS(enc->buf);
+        SRL_UPDATE_BODY_POS(enc);
         srl_dump_sv(aTHX_ enc, src);
         srl_fixup_weakrefs(aTHX_ enc);
-        assert(BUF_POS_OFS(enc) > sereal_header_len);
-        uncompressed_body_length = BUF_POS_OFS(enc) - sereal_header_len;
+        assert(BUF_POS_OFS(enc->buf) > sereal_header_len);
+        uncompressed_body_length = BUF_POS_OFS(enc->buf) - sereal_header_len;
 
         if (enc->snappy_threshold > 0
             && uncompressed_body_length < (STRLEN)enc->snappy_threshold)
@@ -624,9 +689,9 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
             srl_reset_snappy_header_flag(enc);
         }
         else { /* do snappy compression of body */
-            char *old_buf;
+            srl_buffer_t old_buf; /* TODO can we use the enc->tmp_buf here to avoid allocations? */
             char *varint_start= NULL;
-            char *varint_end;
+            char *varint_end= NULL;
             uint32_t dest_len;
 
             /* Get uncompressed payload and total packet output (after compression) lengths */
@@ -639,39 +704,41 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
             srl_init_snappy_workmem(aTHX_ enc);
 
             /* Back up old buffer and allocate new one with correct size */
-            old_buf = enc->buf_start;
-            Newx(enc->buf_start, dest_len, char);
-            if (!enc->buf_start) {
-                enc->buf_start = old_buf; /* for cleanup */
-                croak("Out of memory!");
-            }
-            enc->pos = enc->buf_start;
-            enc->buf_end = enc->buf_start + dest_len;
+            srl_buf_copy_buffer(aTHX_ &enc->buf, &old_buf);
+            srl_buf_init_buffer(aTHX_ &enc->buf, dest_len);
 
             /* Copy Sereal header */
-            Copy(old_buf, enc->pos, sereal_header_len, char);
-            enc->pos += sereal_header_len;
+            Copy(old_buf.start, enc->buf.pos, sereal_header_len, char);
+            enc->buf.pos += sereal_header_len;
+            SRL_UPDATE_BODY_POS(enc); /* will do the right thing wrt. protocol V1 / V2 */
 
             /* Embed compressed packet length */
             if ( SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL ) ) {
-                varint_start= enc->pos;
+                varint_start= enc->buf.pos;
                 srl_buf_cat_varint_nocheck(aTHX_ enc, 0, dest_len);
-                varint_end= enc->pos - 1;
+                varint_end= enc->buf.pos - 1;
             }
 
-            csnappy_compress(old_buf+sereal_header_len, (uint32_t)uncompressed_body_length, enc->pos, &dest_len,
+            csnappy_compress(old_buf.start + sereal_header_len, (uint32_t)uncompressed_body_length, enc->buf.pos, &dest_len,
                              enc->snappy_workmem, CSNAPPY_WORKMEM_BYTES_POWER_OF_TWO);
             assert(dest_len != 0);
 
-            /* overwrite the max size varint with the real size of the compressed data */
-            if (varint_start)
-                srl_update_varint_from_to(aTHX_ varint_start, varint_end, dest_len);
+            /* If compression didn't help, swap back to old, uncompressed buffer */
+            if (dest_len >= uncompressed_body_length) {
+                /* swap in old, uncompressed buffer */
+                srl_buf_swap_buffer(aTHX_ &enc->buf, &old_buf);
+                /* disable snappy flag */
+                srl_reset_snappy_header_flag(enc);
+            }
+            else { /* go ahead with Snappy and do final fixups */
+                /* overwrite the max size varint with the real size of the compressed data */
+                if (varint_start)
+                    srl_update_varint_from_to(aTHX_ varint_start, varint_end, dest_len);
+                enc->buf.pos += dest_len;
+            }
 
-            Safefree(old_buf);
-            enc->pos += dest_len;
-            assert(enc->pos <= enc->buf_end);
-
-            /* TODO If compression didn't help, swap back to old, uncompressed buffer */
+            srl_buf_free_buffer(aTHX_ &old_buf);
+            assert(enc->buf.pos <= enc->buf.end);
         } /* end of "actually do snappy compression" */
     } /* end of "want snappy compression?" */
 
@@ -694,9 +761,9 @@ srl_fixup_weakrefs(pTHX_ srl_encoder_t *enc)
     while ( NULL != (ent = PTABLE_iter_next(it)) ) {
         const ptrdiff_t offset = (ptrdiff_t)ent->value;
         if ( offset ) {
-            char *pos = enc->buf_start + offset;
+            char *pos = enc->buf.body_pos + offset;
             assert(*pos == SRL_HDR_WEAKEN);
-            if (DEBUGHACK) warn("setting %lu to PAD", (long unsigned int)offset);
+            if (DEBUGHACK) warn("setting byte at offset %lu to PAD", (long unsigned int)offset);
             *pos = SRL_HDR_PAD;
         }
     }
@@ -800,7 +867,7 @@ srl_dump_av(pTHX_ srl_encoder_t *enc, AV *src, U32 refcount)
     BUF_SIZE_ASSERT(enc, 2 + SRL_MAX_VARINT_LENGTH + n);
 
     if (n < 16 && refcount == 1) {
-        enc->pos--; /* backup over previous REFN */
+        enc->buf.pos--; /* backup over previous REFN */
         srl_buf_cat_char_nocheck(enc, SRL_HDR_ARRAYREF + n);
     } else {
         /* header and num. elements */
@@ -875,7 +942,7 @@ srl_dump_hv(pTHX_ srl_encoder_t *enc, HV *src, U32 refcount)
         BUF_SIZE_ASSERT(enc, 2 + SRL_MAX_VARINT_LENGTH + 3*n);
 
         if (n < 16 && refcount == 1) {
-            enc->pos--; /* back up over the previous REFN */
+            enc->buf.pos--; /* back up over the previous REFN */
             srl_buf_cat_char_nocheck(enc, SRL_HDR_HASHREF + n);
         } else {
             srl_buf_cat_varint_nocheck(aTHX_ enc, SRL_HDR_HASH, n);
@@ -941,7 +1008,7 @@ srl_dump_hv(pTHX_ srl_encoder_t *enc, HV *src, U32 refcount)
              *            + 2*n = very conservative min size of n hashkeys if all COPY */
         BUF_SIZE_ASSERT(enc, 2 + SRL_MAX_VARINT_LENGTH + 3*n);
         if (n < 16 && refcount == 1) {
-            enc->pos--; /* backup over the previous REFN */
+            enc->buf.pos--; /* backup over the previous REFN */
             srl_buf_cat_char_nocheck(enc, SRL_HDR_HASHREF + n);
         } else {
             srl_buf_cat_varint_nocheck(aTHX_ enc, SRL_HDR_HASH, n);
@@ -1006,7 +1073,7 @@ srl_dump_hk(pTHX_ srl_encoder_t *enc, HE *src, const int share_keys)
             }
             else {
                 /* remember current offset before advancing it */
-                const ptrdiff_t newoffset = enc->pos - enc->buf_start;
+                const ptrdiff_t newoffset = BODY_POS_OFS(enc->buf);
                 PTABLE_store(string_seenhash, (void *)str, (void *)newoffset);
             }
         }
@@ -1046,7 +1113,7 @@ srl_dump_svpv(pTHX_ srl_encoder_t *enc, SV *src)
                 return;
             } else {
                 /* start tracking this string */
-                sv_setuv(ofs_sv, (UV)BUF_POS_OFS(enc));
+                sv_setuv(ofs_sv, (UV)BODY_POS_OFS(enc->buf));
             }
         }
     }
@@ -1064,8 +1131,8 @@ srl_dump_pv(pTHX_ srl_encoder_t *enc, const char* src, STRLEN src_len, int is_ut
     } else {
         srl_buf_cat_varint_nocheck(aTHX_ enc, SRL_HDR_BINARY, src_len);
     }
-    Copy(src, enc->pos, src_len, char);
-    enc->pos += src_len;
+    Copy(src, enc->buf.pos, src_len, char);
+    enc->buf.pos += src_len;
 }
 
 /* Dumps generic SVs and delegates
@@ -1154,18 +1221,18 @@ redo_dump:
                 /* we have seen it before, so we do not need to bless it again */
                 if (ref_rewrite_pos) {
                     if (DEBUGHACK) warn("ref to %p as %lu", src, (long unsigned int)oldoffset);
-                    enc->pos= enc->buf_start + ref_rewrite_pos;
+                    enc->buf.pos= enc->buf.body_pos + ref_rewrite_pos;
                     srl_buf_cat_varint(aTHX_ enc, SRL_HDR_REFP, (UV)oldoffset);
                 } else {
                     if (DEBUGHACK) warn("alias to %p as %lu", src, (long unsigned int)oldoffset);
                     srl_buf_cat_varint(aTHX_ enc, SRL_HDR_ALIAS, (UV)oldoffset);
                 }
-                SRL_SET_FBIT(*(enc->buf_start + oldoffset));
+                SRL_SET_FBIT(*(enc->buf.body_pos + oldoffset));
                 --enc->recursion_depth;
                 return;
             }
-            if (DEBUGHACK) warn("storing %p as %lu", src, (long unsigned int)BUF_POS_OFS(enc));
-            PTABLE_store(ref_seenhash, src, (void *)BUF_POS_OFS(enc));
+            if (DEBUGHACK) warn("storing %p as %lu", src, (long unsigned int)BODY_POS_OFS(enc->buf));
+            PTABLE_store(ref_seenhash, src, (void *)BODY_POS_OFS(enc->buf));
         }
     }
     if (weakref_ofs != 0) {
@@ -1214,10 +1281,10 @@ redo_dump:
 #endif
         if (SvWEAKREF(src)) {
             if (DEBUGHACK) warn("Is weakref %p", src);
-            weakref_ofs= BUF_POS_OFS(enc);
+            weakref_ofs= BODY_POS_OFS(enc->buf);
             srl_buf_cat_char(enc, SRL_HDR_WEAKEN);
         }
-        ref_rewrite_pos= BUF_POS_OFS(enc);
+        ref_rewrite_pos= BODY_POS_OFS(enc->buf);
         if (sv_isobject(src)) {
             /* Check that we actually want to support objects */
             if (expect_false( SRL_ENC_HAVE_OPTION(enc, SRL_F_CROAK_ON_BLESS)) ) {
@@ -1272,7 +1339,7 @@ redo_dump:
                          * want to serialize around for REFP and ALIAS output */               \
                         PTABLE_t *ref_seenhash= SRL_GET_REF_SEENHASH(enc);                     \
                         PTABLE_delete(ref_seenhash, src);                                      \
-                        enc->pos= enc->buf_start + ref_rewrite_pos;                            \
+                        enc->buf.pos= enc->buf.body_pos + ref_rewrite_pos;                     \
                     }                                                                          \
                     srl_buf_cat_char((enc), SRL_HDR_UNDEF);                                    \
                 }                                                                              \
@@ -1300,7 +1367,7 @@ redo_dump:
                          * want to serialize around for REFP and ALIAS output */               \
                         PTABLE_t *ref_seenhash= SRL_GET_REF_SEENHASH(enc);                     \
                         PTABLE_delete(ref_seenhash, src);                                      \
-                        enc->pos= enc->buf_start + ref_rewrite_pos;                            \
+                        enc->buf.pos= enc->buf.body_pos + ref_rewrite_pos;                     \
                         str = SvPV((refsv), len);                                              \
                     } else                                                                     \
                         str = SvPV((src), len);                                                \

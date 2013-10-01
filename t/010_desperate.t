@@ -29,6 +29,7 @@ done_testing();
 
 sub run_tests {
   my ($extra_name, $opt_hash) = @_;
+  setup_tests(2);
   foreach my $bt (@BasicTests) {
     my (undef, $exp, $name) = @$bt;
 
@@ -36,7 +37,7 @@ sub run_tests {
     $name="unnamed" if not defined $name;
     #next unless $name=~/PAD/;
 
-    $exp = "$Header$exp";
+    $exp = Header(). $exp;
     my $enc = Sereal::Encoder->new($opt_hash ? $opt_hash : ());
     my $out;
     eval{

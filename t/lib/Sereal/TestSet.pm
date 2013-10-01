@@ -34,7 +34,8 @@ BEGIN {
 use Exporter;
 our @ISA = qw(Exporter);
 our @EXPORT_OK = qw(
-    $Header @BasicTests $Class $ConstClass
+    @BasicTests $Class $ConstClass
+    Header
     FBIT
     hobodecode
     integer short_string varint array array_fbit
@@ -43,6 +44,7 @@ our @EXPORT_OK = qw(
     run_roundtrip_tests
     write_test_files
     $use_objectv
+    setup_tests
 );
 
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
@@ -136,331 +138,382 @@ sub varint {
     return $out;
 }
 
-our $Header = SRL_MAGIC_STRING . chr(SRL_PROTOCOL_VERSION) . chr(0);
+our $PROTO_VERSION;
 
-my $ary_ref_for_repeating = [5,6];
-my $scalar_ref_for_repeating = \9;
+sub Header {
+    my $proto_version = shift || $PROTO_VERSION;
+    my $user_data_blob = shift;
+    my $hdr_base = SRL_MAGIC_STRING . chr($proto_version||SRL_PROTOCOL_VERSION);
+    if (defined $user_data_blob) {
+        return $hdr_base . varint(1 + length($user_data_blob)) . chr(1) . $user_data_blob;
+    }
+    else {
+        return $hdr_base . chr(0);
+    }
+}
 
-my $weak_thing; $weak_thing = [\$weak_thing, 1]; weaken($weak_thing->[0]);
+sub offset {
+    my ($str)= @_;
+    Carp::confess("no protoversion") if !defined $PROTO_VERSION;
+    if ($PROTO_VERSION >= 2) {
+        return length($str)+1;
+    } else {
+        return length($str) + length Header($PROTO_VERSION);
+    }
+}
 
-my $unicode1= "Ba\xDF Ba\xDF"; my $unicode2= "\x{168}nix! \x{263a}"; utf8::upgrade($unicode1); utf8::upgrade($unicode2);
+sub offseti {
+    my ( $i )= @_;
+    if ($PROTO_VERSION >= 2) {
+        return $i + 1;
+    } else {
+        return $i + length Header($PROTO_VERSION);
+    }
+}
+
+sub debug_checks {
+    my ($data_ref, $encoded_ref, $decoded_ref) = @_;
+    if (defined $ENV{DEBUG_SEREAL}) {
+        note("Original data was: " . Data::Dumper::Dumper($$data_ref)) if defined $data_ref;
+        note("Encoded data is: " . (defined($$encoded_ref) ? $$encoded_ref : "<undef>")) if defined $encoded_ref;
+        note("Decoded data was: " . Data::Dumper::Dumper($$decoded_ref)) if defined $decoded_ref;
+    }
+    if (defined $ENV{DEBUG_DUMP}) {
+        Dump($$encoded_ref) if defined $encoded_ref;
+        Dump($$decoded_ref) if defined $decoded_ref;
+    }
+    if (defined $ENV{DEBUG_HOBO}) {
+        hobodecode($$encoded_ref) if defined $encoded_ref;
+    }
+    exit() if $ENV{DEBUG_FAIL_FATAL};
+}
+
+our @BasicTests;
+sub setup_tests {
+    my ($proto_version)=@_;
+    $PROTO_VERSION= $proto_version if defined $proto_version;
+    my $ary_ref_for_repeating = [5,6];
+    my $scalar_ref_for_repeating = \9;
+
+    my $weak_thing; $weak_thing = [\$weak_thing, 1]; weaken($weak_thing->[0]);
+
+    my $unicode1= "Ba\xDF Ba\xDF"; my $unicode2= "\x{168}nix! \x{263a}"; utf8::upgrade($unicode1); utf8::upgrade($unicode2);
 
 
-our @BasicTests = (
-    # warning: this hardcodes the POS/NEG headers
-    [-16, chr(0b0001_0000), "encode -16"],
-    [-1,  chr(0b0001_1111), "encode -1"],
-    [0, chr(0b0000_0000), "encode 0"],
-    [1, chr(0b0000_0001), "encode 1"],
-    [15, chr(0b0000_1111), "encode 15"],
-    [undef, chr(SRL_HDR_UNDEF), "encode undef"],
-    ["", short_string(""), "encode empty string"],
-    ["1", short_string("1"), "encode string '1'"],
-    ["91a", short_string("91a"), "encode string '91a'"],
-    ["abc" x 1000, chr(SRL_HDR_BINARY).varint(3000).("abc" x 1000), "long ASCII string"],
-    [\1, chr(SRL_HDR_REFN).chr(0b0000_0001), "scalar ref to int"],
-    [[], array(), "empty array ref"],
-    [[1,2,3], array(chr(0b0000_0001), chr(0b0000_0010), chr(0b0000_0011)), "array ref"],
-    [1000, chr(SRL_HDR_VARINT).varint(1000), "large int"],
-    [ [1..1000],
-        array(
-            (map chr, (1 .. SRL_POS_MAX_SIZE)),
-            (map chr(SRL_HDR_VARINT) . varint($_), ((SRL_POS_MAX_SIZE+1) .. 1000))
-        ),
-        "array ref with pos and varints"
-    ],
+    @BasicTests = (
+        # warning: this hardcodes the POS/NEG headers
+        [-16, chr(0b0001_0000), "encode -16"],
+        [-1,  chr(0b0001_1111), "encode -1"],
+        [0, chr(0b0000_0000), "encode 0"],
+        [1, chr(0b0000_0001), "encode 1"],
+        [15, chr(0b0000_1111), "encode 15"],
+        [undef, chr(SRL_HDR_UNDEF), "encode undef"],
+        ["", short_string(""), "encode empty string"],
+        ["1", short_string("1"), "encode string '1'"],
+        ["91a", short_string("91a"), "encode string '91a'"],
+        ["abc" x 1000, chr(SRL_HDR_BINARY).varint(3000).("abc" x 1000), "long ASCII string"],
+        [\1, chr(SRL_HDR_REFN).chr(0b0000_0001), "scalar ref to int"],
+        [[], array(), "empty array ref"],
+        [[1,2,3], array(chr(0b0000_0001), chr(0b0000_0010), chr(0b0000_0011)), "array ref"],
+        [1000, chr(SRL_HDR_VARINT).varint(1000), "large int"],
+        [ [1..1000],
+            array(
+                (map chr, (1 .. SRL_POS_MAX_SIZE)),
+                (map chr(SRL_HDR_VARINT) . varint($_), ((SRL_POS_MAX_SIZE+1) .. 1000))
+            ),
+            "array ref with pos and varints"
+        ],
 
-    [{}, hash(), "empty hash ref"],
-    [{foo => "baaaaar"}, hash(short_string("foo"),short_string("baaaaar")), "simple hash ref"],
-    [
-      [qw(foooo foooo foooo)],
-      sub {
-          my $opt = shift;
-          if ($opt->{dedupe_strings} || $opt->{aliased_dedupe_strings}) {
-              my $d = array_head(3);
-              my $pos = length($Header) + length($d);
-              my $tag = $opt->{aliased_dedupe_strings} ? SRL_HDR_ALIAS : SRL_HDR_COPY;
-              $d .= short_string("foooo") . chr($tag) . varint($pos)
-                    . chr($tag) . varint($pos);
-              return $d;
-          }
-          else {
-              return array(short_string("foooo"),short_string("foooo"), short_string("foooo"));
-          }
-      },
-      "ary ref with repeated string"
-    ],
-    [
-      [{foooo => "barrr"}, {barrr => "foooo"}],
-      array(hash(short_string("foooo"), short_string("barrr")),
-            hash(short_string("barrr"), short_string("foooo"))),
-      "ary ref of hash refs without repeated strings"
-    ],
-    [
-      [{foooo => "foooo"}, {foooo2 => "foooo"}],
-      sub {
-          my $opt = shift;
-          if ($opt->{dedupe_strings} || $opt->{aliased_dedupe_strings}) {
-              my $tag = $opt->{aliased_dedupe_strings} ? SRL_HDR_ALIAS : SRL_HDR_COPY;
-              my $d = array_head(2) . hash_head(2) . short_string("foooo");
-              my $pos = length($Header) + length($d);
-              $d .= short_string("foooo") . hash_head(2)
-                    . short_string("foooo2")
-                    . chr($tag) . varint($pos);
-              return $d;
-          }
-          else {
-              return array(hash(short_string("foooo"), short_string("foooo")),
-                           hash(short_string("foooo2"), short_string("foooo"))),
-          }
-      },
-      "ary ref of hash refs with repeated strings"
-    ],
-    [$scalar_ref_for_repeating, chr(SRL_HDR_REFN).chr(0b0000_1001), "scalar ref to constant"],
-    [[$scalar_ref_for_repeating, $scalar_ref_for_repeating],
-        do {
-            my $content = array_head(2);
-            $content   .= chr(SRL_HDR_REFN);
-            my $pos = length($Header) + length($content);
-            $content    .= chr(0b1000_1001)
-                          .chr(SRL_HDR_REFP)
-                          .varint($pos)
-            ;
-            $content
-        }, "repeated substructure (REFP): scalar ref"],
-    [[$ary_ref_for_repeating, $ary_ref_for_repeating],
-        do {
-            my $content = array_head(2);
-            my $pos = length($Header) + length($content) + 1;
-            $content   .= array_fbit(chr(0b0000_0101), chr(0b0000_0110))
-                          .chr(SRL_HDR_REFP)
-                          .varint($pos)
-            ;
-            $content
-        }, "repeated substructure (REFP): array"],
-    [[\$ary_ref_for_repeating, [1, $ary_ref_for_repeating]],
-        do {
-            my $content = array_head(2) . chr(SRL_HDR_REFN);
-            my $pos = length($Header) + length($content) + 1;
-            $content .= array_fbit(
-                              chr(0b0000_0101),
-                              chr(0b0000_0110)
-                          )
-                          . array(
-                              chr(0b0000_0001),
-                              chr(SRL_HDR_REFP) . varint($pos)
-                          )
-            ;
-            $content
-        }, "repeated substructure (REFP): asymmetric"],
-    [
-        $weak_thing,
-        chr(SRL_HDR_REFN) . chr(SRL_HDR_ARRAY + FBIT) . varint(2)
-        .chr(SRL_HDR_PAD)
-        .chr(SRL_HDR_REFN)
-        .chr(SRL_HDR_REFP)
-        .varint(length($Header)+1)
-        .chr(0b0000_0001)
-        ,
-        "weak thing copy (requires PAD)"
-    ],
-    [
-        \$weak_thing,
-        chr(SRL_HDR_REFN)
-        . chr(SRL_HDR_REFN + FBIT)
-            . chr(SRL_HDR_ARRAY) . varint(2)
-                .chr(SRL_HDR_WEAKEN) . chr(SRL_HDR_REFP) . varint(length($Header)+1)
-                .chr(0b0000_0001)
-        ,
-        "weak thing ref"
-    ],
-    sub { \@_ } ->(
-        $weak_thing,
-        chr(SRL_HDR_REFN + FBIT)
-            .chr(SRL_HDR_ARRAY).varint(2)
-                .chr(SRL_HDR_WEAKEN).chr(SRL_HDR_REFP).varint(length($Header))
-                .chr(0b0000_0001)
-        ,
-        "weak thing (aliased root)"
-    ),
-    [
-        do { my @array; $array[0]=\$array[1]; $array[1]=\$array[0]; \@array },
-        do {
-            my $content= array_head(2);
-            my $pos= length($content);
-            $content
+        [{}, hash(), "empty hash ref"],
+        [{foo => "baaaaar"}, hash(short_string("foo"),short_string("baaaaar")), "simple hash ref"],
+        [
+          [qw(foooo foooo foooo)],
+          sub {
+              my $opt = shift;
+              if ($opt->{dedupe_strings} || $opt->{aliased_dedupe_strings}) {
+                  my $d = array_head(3);
+                  my $pos = offset($d);
+                  my $tag = $opt->{aliased_dedupe_strings} ? SRL_HDR_ALIAS : SRL_HDR_COPY;
+                  $d .= short_string("foooo") . chr($tag) . varint($pos)
+                        . chr($tag) . varint($pos);
+                  return $d;
+              }
+              else {
+                  return array(short_string("foooo"),short_string("foooo"), short_string("foooo"));
+              }
+          },
+          "ary ref with repeated string"
+        ],
+        [
+          [{foooo => "barrr"}, {barrr => "foooo"}],
+          array(hash(short_string("foooo"), short_string("barrr")),
+                hash(short_string("barrr"), short_string("foooo"))),
+          "ary ref of hash refs without repeated strings"
+        ],
+        [
+          [{foooo => "foooo"}, {foooo2 => "foooo"}],
+          sub {
+              my $opt = shift;
+              if ($opt->{dedupe_strings} || $opt->{aliased_dedupe_strings}) {
+                  my $tag = $opt->{aliased_dedupe_strings} ? SRL_HDR_ALIAS : SRL_HDR_COPY;
+                  my $d = array_head(2) . hash_head(2) . short_string("foooo");
+                  my $pos = offset($d);
+                  $d .= short_string("foooo") . hash_head(2)
+                        . short_string("foooo2")
+                        . chr($tag) . varint($pos);
+                  return $d;
+              }
+              else {
+                  return array(hash(short_string("foooo"), short_string("foooo")),
+                               hash(short_string("foooo2"), short_string("foooo"))),
+              }
+          },
+          "ary ref of hash refs with repeated strings"
+        ],
+        [$scalar_ref_for_repeating, chr(SRL_HDR_REFN).chr(0b0000_1001), "scalar ref to constant"],
+        [[$scalar_ref_for_repeating, $scalar_ref_for_repeating],
+            do {
+                my $content = array_head(2);
+                $content   .= chr(SRL_HDR_REFN);
+                my $pos = offset($content);
+                $content    .= chr(0b1000_1001)
+                              .chr(SRL_HDR_REFP)
+                              .varint($pos)
+                ;
+                $content
+            }, "repeated substructure (REFP): scalar ref"],
+        [[$ary_ref_for_repeating, $ary_ref_for_repeating],
+            do {
+                my $content = array_head(2);
+                my $pos = offset($content) + 1;
+                $content   .= array_fbit(chr(0b0000_0101), chr(0b0000_0110))
+                              .chr(SRL_HDR_REFP)
+                              .varint($pos)
+                ;
+                $content
+            }, "repeated substructure (REFP): array"],
+        [[\$ary_ref_for_repeating, [1, $ary_ref_for_repeating]],
+            do {
+                my $content = array_head(2) . chr(SRL_HDR_REFN);
+                my $pos = offset($content) + 1;
+                $content .= array_fbit(
+                                  chr(0b0000_0101),
+                                  chr(0b0000_0110)
+                              )
+                              . array(
+                                  chr(0b0000_0001),
+                                  chr(SRL_HDR_REFP) . varint($pos)
+                              )
+                ;
+                $content
+            }, "repeated substructure (REFP): asymmetric"],
+        [
+            $weak_thing,
+            chr(SRL_HDR_REFN) 
+            . chr(SRL_HDR_ARRAY + FBIT) . varint(2)
+                . chr(SRL_HDR_PAD) . chr(SRL_HDR_REFN) 
+                    . chr(SRL_HDR_REFP) . varint(offseti(1))
+                . chr(0b0000_0001)
+            ,
+            "weak thing copy (requires PAD)"
+        ],
+        [
+            \$weak_thing,
+            chr(SRL_HDR_REFN)
             . chr(SRL_HDR_REFN + FBIT)
-            . chr(SRL_HDR_REFP + FBIT)
-            . varint(length($Header) + $pos )
-            . chr(SRL_HDR_ALIAS)
-            . varint(length($Header) + $pos + 1)
-        },
-        "scalar cross"
-    ],
-    [
-        do { my @array; $array[0]=\$array[1]; $array[1]=\$array[0]; weaken($array[1]); weaken($array[0]); \@array },
-        do {
-            my $content= array_head(2);
-            my $pos= length($content);
-            $content
-            . chr(SRL_HDR_WEAKEN + FBIT)
-            . chr(SRL_HDR_REFN)
-            . chr(SRL_HDR_WEAKEN + FBIT)
-            . chr(SRL_HDR_REFP)
-            . varint(length($Header)+$pos)
-            . chr(SRL_HDR_ALIAS)
-            . varint(length($Header)+$pos+2)
-        },
-        "weak scalar cross"
-    ],
-    [
-        bless([],"foo"),
-        dump_bless(array(), "foo"),
-        "bless [], 'foo' (2)"
-    ],
-    [
-        do { my $qr= bless qr/foo/ix,"bar"; [ $qr, $qr ] },
-        do {
-            my $content= array_head(2);
-            my $pos= length($content);
-            join("", $content,
-                chr(SRL_HDR_OBJECT),
-                short_string("bar"),
-                chr(SRL_HDR_REFN),
-                chr(SRL_HDR_REGEXP + FBIT),
-                short_string("foo"),
-                short_string("ix"),
-                chr(SRL_HDR_REFP),
-                varint(length($Header) + $pos + 6 ),
-            )
-        },
-        "blessed regexp with reuse"
-    ],
-    [
-        do { my $o1=bless [], "foo"; my $o2=bless [], "foo"; [ $o1, $o2, $o1, $o2 ] },
-        do {
-            my $content= array_head(4). chr(SRL_HDR_OBJECT);
-            my $pos= length($content);
-            join("",$content,
-                        short_string("foo"),
-                        chr(SRL_HDR_REFN).chr(SRL_HDR_ARRAY + FBIT),varint(0),
-                    chr( SRL_HDR_OBJECT + $use_objectv),
-                        $use_objectv ? () : chr(SRL_HDR_COPY), varint(length($Header) + $pos),
-                        chr(SRL_HDR_REFN).chr(SRL_HDR_ARRAY  + FBIT), varint(0),
-                    chr(SRL_HDR_REFP),varint(length($Header) + $pos + 5),
-                    chr(SRL_HDR_REFP),varint(length($Header) + $pos + 10),
-                )
-        },
-        "blessed arrays with reuse"
-    ],
-    [
-        [bless([], "foo"), bless([], "foo")],
-        do {
-            my $content = array_head(2) . chr(SRL_HDR_OBJECT);
-            my $pos = length($Header) + length($content);
-            $content .= short_string("foo")
-                        . array()
-                        . dump_bless( array(), \$pos )
-            ;
-            $content
-        },
-        "reused classname empty array"
-    ],
-    [
-        bless([bless {}, "foo"], "foo"),
-        do {
-            my $content = chr(SRL_HDR_OBJECT);
-            my $pos = length($Header) + length($content);
-            $content .= short_string("foo")
-                        . array_head(1)
-                          . dump_bless(hash(), \$pos);
-            ;
-            $content
-        },
-        "wrapped objects"
-    ],
-    [
-        qr/foo/,
-        dump_bless(
-            chr(SRL_HDR_REFN)
-            .chr(SRL_HDR_REGEXP)
-            .short_string("foo")
-            .short_string(""),
-            "Regexp"
+                . chr(SRL_HDR_ARRAY) . varint(2)
+                    .chr(SRL_HDR_WEAKEN) . chr(SRL_HDR_REFP) . varint(offseti(1))
+                    .chr(0b0000_0001)
+            ,
+            "weak thing ref"
+        ],
+        sub { \@_ } ->(
+            $weak_thing,
+            chr(SRL_HDR_REFN + FBIT)
+                .chr(SRL_HDR_ARRAY).varint(2)
+                    .chr(SRL_HDR_WEAKEN).chr(SRL_HDR_REFP).varint(offseti(0))
+                    .chr(0b0000_0001)
+            ,
+            "weak thing (aliased root)"
         ),
-        "qr/foo/"
-    ],
-    [
-        qr/(?i-xsm:foo)/,
-        dump_bless(
-            chr(SRL_HDR_REFN)
-            .chr(SRL_HDR_REGEXP)
-            .short_string("(?i-xsm:foo)")
-            .short_string(""),
-            "Regexp"
-        ),
-        "qr/(?i-xsm:foo)/"
-    ],
-    [
-        qr/foo/i,
-        dump_bless(
-            chr(SRL_HDR_REFN)
-            .chr(SRL_HDR_REGEXP)
-            .short_string("foo")
-            .short_string("i"),
-            "Regexp"
-        ),
-        "qr/foo/i"
-    ],
-    [
-        [{foo => 1}, {foo => 2}],
-        sub {
-            my $opt = shift;
-            if ($opt->{no_shared_hashkeys}) {
-                return array(
-                    hash(
-                        short_string("foo"),
-                        integer(1),
-                    ),
-                    hash(
-                        short_string("foo"),
-                        integer(2),
-                    ),
-                );
-            }
-            else {
+        [
+            do { my @array; $array[0]=\$array[1]; $array[1]=\$array[0]; \@array },
+            do {
                 my $content= array_head(2);
-                return join(
-                    "",
-                    $content,
-                    hash(
-                        short_string("foo"),
-                        integer(1),
-                    ),
-                    hash(
-                        chr(SRL_HDR_COPY) . varint(length($Header)+length($content)+1),
-                        integer(2),
-                    ),
+                my $pos= offset($content);
+                $content
+                . chr(SRL_HDR_REFN + FBIT)
+                . chr(SRL_HDR_REFP + FBIT)
+                . varint( $pos )
+                . chr(SRL_HDR_ALIAS)
+                . varint($pos + 1)
+            },
+            "scalar cross"
+        ],
+        [
+            do { my @array; $array[0]=\$array[1]; $array[1]=\$array[0]; weaken($array[1]); weaken($array[0]); \@array },
+            do {
+                my $content= array_head(2);
+                my $pos= offset($content);
+                $content
+                . chr(SRL_HDR_WEAKEN + FBIT)
+                . chr(SRL_HDR_REFN)
+                . chr(SRL_HDR_WEAKEN + FBIT)
+                . chr(SRL_HDR_REFP)
+                . varint($pos)
+                . chr(SRL_HDR_ALIAS)
+                . varint($pos+2)
+            },
+            "weak scalar cross"
+        ],
+        [
+            bless([],"foo"),
+            dump_bless(array(), "foo"),
+            "bless [], 'foo' (2)"
+        ],
+        [
+            do { my $qr= bless qr/foo/ix,"bar"; [ $qr, $qr ] },
+            do {
+                my $content= array_head(2);
+                my $pos= offset($content);
+                join("", $content,
+                    chr(SRL_HDR_OBJECT),
+                    short_string("bar"),
+                    chr(SRL_HDR_REFN),
+                    chr(SRL_HDR_REGEXP + FBIT),
+                    short_string("foo"),
+                    short_string("ix"),
+                    chr(SRL_HDR_REFP),
+                    varint($pos + 6 ),
                 )
-            }
-        },
-        "duplicate hash keys"
-    ],
-    [
-        { $unicode1 => $unicode2 },
-        hash(
-            chr(SRL_HDR_STR_UTF8) . varint(bytes::length($unicode1)) . encode_utf8($unicode1),
-            chr(SRL_HDR_STR_UTF8) . varint(bytes::length($unicode2)) . encode_utf8($unicode2),
-        ),
-        "simple unicode hash key and value"
-    ],
-    [
-        sub { \@_ }->(!1,!0),
-        array(chr(SRL_HDR_FALSE),chr(SRL_HDR_TRUE)),
-        "true/false"
-    ]
-);
-
+            },
+            "blessed regexp with reuse"
+        ],
+        [
+            do { my $o1=bless [], "foo"; my $o2=bless [], "foo"; [ $o1, $o2, $o1, $o2 ] },
+            do {
+                my $content= array_head(4). chr(SRL_HDR_OBJECT);
+                my $pos= offset($content);
+                join("",$content,
+                            short_string("foo"),
+                            chr(SRL_HDR_REFN).chr(SRL_HDR_ARRAY + FBIT),varint(0),
+                        chr( SRL_HDR_OBJECT + $use_objectv),
+                            $use_objectv ? () : chr(SRL_HDR_COPY), varint($pos),
+                            chr(SRL_HDR_REFN).chr(SRL_HDR_ARRAY  + FBIT), varint(0),
+                        chr(SRL_HDR_REFP),varint($pos + 5),
+                        chr(SRL_HDR_REFP),varint($pos + 10),
+                    )
+            },
+            "blessed arrays with reuse"
+        ],
+        [
+            [bless([], "foo"), bless([], "foo")],
+            do {
+                my $content = array_head(2) . chr(SRL_HDR_OBJECT);
+                my $pos = offset($content);
+                $content .= short_string("foo")
+                            . array()
+                            . dump_bless( array(), \$pos )
+                ;
+                $content
+            },
+            "reused classname empty array"
+        ],
+        [
+            bless([bless {}, "foo"], "foo"),
+            do {
+                my $content = chr(SRL_HDR_OBJECT);
+                my $pos = offset($content);
+                $content .= short_string("foo")
+                            . array_head(1)
+                              . dump_bless(hash(), \$pos);
+                ;
+                $content
+            },
+            "wrapped objects"
+        ],
+        [
+            qr/foo/,
+            dump_bless(
+                chr(SRL_HDR_REFN)
+                .chr(SRL_HDR_REGEXP)
+                .short_string("foo")
+                .short_string(""),
+                "Regexp"
+            ),
+            "qr/foo/"
+        ],
+        [
+            qr/(?i-xsm:foo)/,
+            dump_bless(
+                chr(SRL_HDR_REFN)
+                .chr(SRL_HDR_REGEXP)
+                .short_string("(?i-xsm:foo)")
+                .short_string(""),
+                "Regexp"
+            ),
+            "qr/(?i-xsm:foo)/"
+        ],
+        [
+            qr/foo/i,
+            dump_bless(
+                chr(SRL_HDR_REFN)
+                .chr(SRL_HDR_REGEXP)
+                .short_string("foo")
+                .short_string("i"),
+                "Regexp"
+            ),
+            "qr/foo/i"
+        ],
+        [
+            [{foo => 1}, {foo => 2}],
+            sub {
+                my $opt = shift;
+                if ($opt->{no_shared_hashkeys}) {
+                    return array(
+                        hash(
+                            short_string("foo"),
+                            integer(1),
+                        ),
+                        hash(
+                            short_string("foo"),
+                            integer(2),
+                        ),
+                    );
+                }
+                else {
+                    my $content= array_head(2);
+                    return join(
+                        "",
+                        $content,
+                        hash(
+                            short_string("foo"),
+                            integer(1),
+                        ),
+                        hash(
+                            chr(SRL_HDR_COPY) . varint(offset($content)+1),
+                            integer(2),
+                        ),
+                    )
+                }
+            },
+            "duplicate hash keys"
+        ],
+        [
+            { $unicode1 => $unicode2 },
+            hash(
+                chr(SRL_HDR_STR_UTF8) . varint(bytes::length($unicode1)) . encode_utf8($unicode1),
+                chr(SRL_HDR_STR_UTF8) . varint(bytes::length($unicode2)) . encode_utf8($unicode2),
+            ),
+            "simple unicode hash key and value"
+        ],
+        [
+            sub { \@_ }->(!1,!0),
+            array(chr(SRL_HDR_FALSE),chr(SRL_HDR_TRUE)),
+            "true/false"
+        ]
+    );
+}
 
 
 sub get_git_top_dir {
@@ -634,19 +687,28 @@ if (eval "use Array::RefElem (av_store hv_store); 1") {
 
 
 sub run_roundtrip_tests {
-    for my $opt (
-        ['plain',       {                  } ],
-        ['snappy',      { snappy => 1      } ],
-        ['snappy_incr', { snappy_incr => 1 } ],
-        ['sort_keys',   { sort_keys => 1   } ],
-        ['dedupe_strings',   { dedupe_strings => 1 } ],
-    ) {
-        run_roundtrip_tests_internal(@$opt);
+    for my $proto_version (qw(2 1)) {
+        my $suffix = $proto_version == 1 ? "_v1" : "";
+
+        for my $opt (
+            ['plain',          {                  } ],
+            ['snappy',         { snappy         => 1 } ],
+            ['snappy_incr',    { snappy_incr    => 1 } ],
+            ['sort_keys',      { sort_keys      => 1 } ],
+            ['dedupe_strings', { dedupe_strings => 1 } ],
+        ) {
+            my ($name, $opts) = @$opt;
+            $name .= $suffix;
+            $opts->{use_protocol_v1} = 1 if $proto_version == 1;
+            $PROTO_VERSION= $proto_version;
+            setup_tests();
+            run_roundtrip_tests_internal($name, $opts);
+        }
     }
 }
 
 sub run_roundtrip_tests_internal {
-    my ($ename, $opt) = @_;
+    my ($ename, $opt, $encode_decode_callbacks) = @_;
     my $decoder = Sereal::Decoder->new($opt);
     my $encoder = Sereal::Encoder->new($opt);
 
@@ -657,52 +719,77 @@ sub run_roundtrip_tests_internal {
                       ['object-oriented',
                         sub {$encoder->encode(shift)},
                         sub {$decoder->decode(shift)}],
+                      ['header-body',
+                        sub {$encoder->encode(shift, 123456789)}, # header data is abitrary to stand out for debugging
+                        sub {$decoder->decode(shift)}],
+                      ['header-only',
+                        sub {$encoder->encode(987654321, shift)}, # body data is abitrary to stand out for debugging
+                        sub {$decoder->decode_only_header(shift)}],
                       )
     {
         my ($mname, $enc, $dec) = @$meth;
+        next if $mname =~ /header/ and $opt->{use_protocol_v1};
 
         foreach my $rt (@RoundtripTests) {
             my ($name, $data) = @$rt;
-            my $encoded = $enc->($data);
+            my $encoded;
+            eval {$encoded = $enc->($data); 1}
+                or do {
+                    my $err = $@ || 'Zombie error';
+                    diag("Got error while encoding: $err");
+                };
             ok(defined $encoded, "$name ($ename, $mname, encoded defined)")
                 or do {
-                    if (defined $ENV{DEBUG_SEREAL}) {
-                        note("Data was: " . Data::Dumper::Dumper($data));
-                        note("Output was: " . (defined($encoded) ? $encoded : "<undef>"));
-                    }
+                    debug_checks(\$data, \$encoded, undef);
                     next;
                 };
-            my $decoded= $dec->($encoded);
+            my $decoded;
+            eval {$decoded = $dec->($encoded); 1}
+                or do {
+                    my $err = $@ || 'Zombie error';
+                    diag("Got error while decoding: $err");
+                };
             ok( defined($decoded) == defined($data), "$name ($ename, $mname, decoded definedness)")
-              or next;
-            my $encoded2 = $enc->($decoded);
+                or do {
+                    debug_checks(\$data, \$encoded, undef);
+                    next;
+                };
+
+            # Second roundtrip
+            my $encoded2;
+            eval {$encoded2 = $enc->($decoded); 1}
+                or do {
+                    my $err = $@ || 'Zombie error';
+                    diag("Got error while encoding the second time: $err");
+                };
             ok(defined $encoded2, "$name ($ename, $mname, encoded2 defined)")
-              or next;
-            my $decoded2 = $dec->($encoded2);
+                or do {
+                    debug_checks(\$data, \$encoded, \$decoded);
+                    next;
+                };
+
+            my $decoded2;
+            eval {$decoded2 = $dec->($encoded2); 1}
+                or do {
+                    my $err = $@ || 'Zombie error';
+                    diag("Got error while encoding the second time: $err");
+                };
+
             ok(defined($decoded2) == defined($data), "$name ($ename, $mname, decoded2 defined)")
-              or next;
+                or next;
             is_deeply($decoded, $data, "$name ($ename, $mname, decoded vs data)")
-              or do {
-                  if ($ENV{DEBUG_DUMP}) {
-                      Dump($decoded);
-                      Dump($data);
-                  }
-              };
+                or do {
+                    debug_checks(\$data, \$encoded2, \$decoded2);
+                };
             is_deeply($decoded2, $data, "$name ($ename, $mname, decoded2 vs data)")
-              or do {
-                  if ($ENV{DEBUG_DUMP}) {
-                      Dump($decoded2);
-                      Dump($data);
-                  }
-              };
+                or do {
+                    debug_checks(\$data, \$encoded2, \$decoded2);
+                };
             is_deeply($decoded, $decoded2, "$name ($ename, $mname, decoded vs decoded2)")
-              or do {
-                  if ($ENV{DEBUG_DUMP}) {
-                      Dump($decoded);
-                      Dump($decoded2);
-                  }
-              };
-            
+                or do {
+                    debug_checks(\$data, \$encoded2, \$decoded2);
+                };
+
             if (0) {
                 # It isnt really safe to test this way right now. The exact output
                 # of two runs of Sereal is not guaranteed to be the same due to the effect of
@@ -719,19 +806,7 @@ sub run_roundtrip_tests_internal {
                     $ret = is_string($encoded2, $encoded, "$name ($ename, $mname, encoded2 vs encoded)");
                 }
                 $ret or do {
-                    if ($ENV{DEBUG_DUMP}) {
-                        Dump($decoded);
-                        Dump($data);
-                    } elsif ($ENV{DEBUG_HOBO}) {
-                        open my $pipe,"| perl -Mblib=../Encoder/blib -Mblib=../Decoder/blib author_tools/hobodecoder.pl -e"
-                          or die "Dead: $!";
-                        print $pipe $encoded;
-                        close $pipe;
-                        open $pipe,"| perl -Mblib=../Encoder/blib -Mblib=../Decoder/blib author_tools/hobodecoder.pl -e"
-                          or die "Dead: $!";
-                        print $pipe $encoded2;
-                        close $pipe;
-                    }
+                    debug_checks(\$data, \$encoded, \$decoded);
                 };
             }
         }
@@ -757,11 +832,12 @@ sub write_test_files {
     my $make_data_file_name = sub {File::Spec->catfile($dir, sprintf("test_data_%05u", shift))};
     my $make_name_file_name = sub {File::Spec->catfile($dir, sprintf("test_name_%05u", shift))};
 
+    setup_tests();
     foreach my $testno (1..@BasicTests) {
         my $t = $BasicTests[$testno-1];
         my $data = ref($t->[1]) eq 'CODE' ? $t->[1]->() : $t->[1];
 
-        _write_file($make_data_file_name->($testno), $Header.$data);
+        _write_file($make_data_file_name->($testno), Header($PROTO_VERSION).$data);
         _write_file($make_name_file_name->($testno), $t->[2] . "\n");
     }
 

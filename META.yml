@@ -31,4 +31,4 @@ requires:
 resources:
   bugtracker: https://github.com/Sereal/Sereal/issues
   repository: git://github.com/Sereal/Sereal.git
-version: 0.37
+version: 2.00_01
