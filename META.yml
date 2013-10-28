@@ -9,6 +9,7 @@ build_requires:
   File::Path: 0
   File::Spec: 0
   Scalar::Util: 0
+  Sereal::Decoder: 2.00
   Test::LongString: 0
   Test::More: 0.88
   Test::Warn: 0
@@ -31,4 +32,4 @@ requires:
 resources:
   bugtracker: https://github.com/Sereal/Sereal/issues
   repository: git://github.com/Sereal/Sereal.git
-version: 2.00_01
+version: 2.00_02
