@@ -689,15 +689,19 @@ if (eval "use Array::RefElem (av_store hv_store); 1") {
 
 
 sub run_roundtrip_tests {
-    for my $proto_version (qw(2 1)) {
+    my ($proto_version) = @_;
+    my @proto_versions = ($proto_version ? ($proto_version) : qw(2 1));
+
+    for my $proto_version ($proto_version) {
         my $suffix = $proto_version == 1 ? "_v1" : "";
 
         for my $opt (
             ['plain',          {                  } ],
-            ['snappy',         { snappy         => 1 } ],
-            ['snappy_incr',    { snappy_incr    => 1 } ],
-            ['sort_keys',      { sort_keys      => 1 } ],
-            ['dedupe_strings', { dedupe_strings => 1 } ],
+            ['snappy',         { snappy           => 1 } ],
+            ['snappy_incr',    { snappy_incr      => 1 } ],
+            ['sort_keys',      { sort_keys        => 1 } ],
+            ['dedupe_strings', { dedupe_strings   => 1 } ],
+            ['freeze/thaw',    { freeze_callbacks => 1 } ],
         ) {
             my ($name, $opts) = @$opt;
             $name .= $suffix;

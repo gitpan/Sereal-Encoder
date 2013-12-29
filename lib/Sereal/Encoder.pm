@@ -5,7 +5,7 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '2.00_02'; # Don't forget to update the TestCompat set for testing against installed decoders!
+our $VERSION = '2.00_03'; # Don't forget to update the TestCompat set for testing against installed decoders!
 
 # not for public consumption, just for testing.
 (my $num_version = $VERSION) =~ s/_//;
@@ -70,15 +70,6 @@ encoder.
 Currently, the following options are recognized, none of them are on
 by default.
 
-=head3 no_shared_hashkeys
-
-When the C<no_shared_hashkeys> option is set ot a true value, then
-the encoder will disable the detection and elimination of repeated hash
-keys. This only has an effect for serializing structures containing hashes.
-By skipping the detection of repeated hash keys, performance goes up a bit,
-but the size of the output can potentially be much larger.
-Do not disable this unless you have a reason to.
-
 =head3 snappy
 
 If set, the main payload of the Sereal document will be compressed using
@@ -123,6 +114,21 @@ data.
 See also C<no_bless_objects> to skip the blessing of objects.
 When both flags are set, C<croak_on_bless> has a higher precedence then
 C<no_bless_objects>.
+
+=head3 freeze_callbacks
+
+This option is new in Sereal v2 and needs a Sereal v2 decoder.
+
+If this option is set, the encoder will check for and possibly invoke
+the C<FREEZE> method on any object in the input data. An object that
+was serialized using its C<FREEZE> method will have its corresponding
+C<THAW> class method called during deserialization. The exact semantics
+are documented below under L</"FREEZE/THAW CALLBACK MECHANISM">.
+
+Beware that using this functionality means a significant slowdown for
+object serialization. Even when serializing objects without a C<FREEZE>
+method, the additional method look up will cost a small amount of runtime.
+Yes, C<Sereal::Encoder> is so fast that is may make a difference.
 
 =head3 no_bless_objects
 
@@ -197,6 +203,16 @@ the memory.
 See L</NON-CANONICAL> for why you might want to use this, and for the
 various caveats involved.
 
+=head3 no_shared_hashkeys
+
+When the C<no_shared_hashkeys> option is set ot a true value, then
+the encoder will disable the detection and elimination of repeated hash
+keys. This only has an effect for serializing structures containing hashes.
+By skipping the detection of repeated hash keys, performance goes up a bit,
+but the size of the output can potentially be much larger.
+
+Do not disable this unless you have a reason to.
+
 =head3 dedupe_strings
 
 If this is option is enabled/true then Sereal will use a hash to encode duplicates
@@ -207,12 +223,14 @@ significant reduction in the size of the encoded form. Currently only strings
 longer than 3 characters will be deduped, however this may change in the future.
 
 Note that Sereal will perform certain types of deduping automatically even
-without this option. In particular class names and hash keys are deduped
+without this option. In particular class names and hash keys (see also the
+C<no_shared_hashkeys> setting) are deduped
 regardless of this option. Only enable this if you have good reason to
 believe that there are many duplicated strings as values in your data
 structure.
 
-Use of this option does not require an upgraded decoder. The deduping
+Use of this option does not require an upgraded decoder (this option was added in
+Sereal::Encoder 0.32). The deduping
 is performed in such a way that older decoders should handle it just fine.
 In other words, the output of a Sereal B<decoder> should not depend on
 whether this option was used during B<encoding>. See also below:
@@ -269,6 +287,70 @@ to be serialized. For ready-made comparison scripts, see the
 F<author_tools/bench.pl> and F<author_tools/dbench.pl> programs that are part
 of this distribution. Suffice to say that this library is easily competitive
 in both time and space efficiency with the best alternatives.
+
+=head1 FREEZE/THAW CALLBACK MECHANISM
+
+This mechanism is enabled using the C<freeze_callbacks> option of the encoder.
+It is inspired by the equivalent mechanism in L<CBOR::XS> and differs only
+in one minor detail, explained below. The general mechanism is documented
+in the I<A GENERIC OBJECT SERIALIATION PROTOCOL> section of L<Types::Serializer>.
+Similar to CBOR using C<CBOR>, Sereal uses the string C<Sereal> as a serializer
+identifier for the callbacks.
+
+The one difference to the mechanism as supported by CBOR is that in Sereal,
+the C<FREEZE> callback must return a single value. That value can be any
+data structure supported by Sereal (hopefully without causing infinite recursion
+by including the original object). But C<FREEZE> can't return a list as with CBOR.
+This should not be any practical limitation whatsoever. Just return an array
+reference instead of a list.
+
+Here is a contrived example of a class implementing the C<FREEZE> / C<THAW> mechansim.
+
+  package
+    File;
+  
+  use Moo;
+  
+  has 'path' => (is => 'ro');
+  has 'fh' => (is => 'rw');
+  
+  # open file handle if necessary and return it
+  sub get_fh {
+    my $self = shift;
+    # This could also with fancier Moo(se) syntax
+    my $fh = $self->fh;
+    if (not $fh) {
+      open $fh, "<", $self->path or die $!;
+      $self->fh($fh);
+    }
+    return $fh;
+  }
+  
+  sub FREEZE {
+    my ($self, $serializer) = @_;
+    # Could switch on $serializer here: JSON, CBOR, Sereal, ...
+    # But this case is so simple that it will work with ALL of them.
+    # Do not try to serialize our file handle! Path will be enough
+    # to recreate.
+    return $self->path;
+  }
+  
+  sub THAW {
+    my ($class, $serializer, $data) = @_;
+    # Turn back into object.
+    return $class->new(path => $data);
+  }
+
+Why is the C<FREEZE>/C<THAW> mechanism important here? Our contrived C<File>
+class may contain a file handle which can't be serialized. So C<FREEZE> not
+only returns just the path (which is more compact than encoding the actual
+object contents), but it strips the file handle which can be lazily reopened
+on the other side of the serialization/deserialization pipe.
+But this example also shows that a naive implementation can easily end up
+with subtle bugs. A file handle itself has state (position in file, etc).
+Thus the deserialization in the above example won't accurately reproduce
+the original state. It can't, of course, if it's deserialized in a different
+environment anyway.
 
 =head1 THREAD-SAFETY
 
