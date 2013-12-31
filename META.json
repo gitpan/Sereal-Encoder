@@ -46,7 +46,7 @@
          }
       }
    },
-   "release_status" : "testing",
+   "release_status" : "stable",
    "resources" : {
       "bugtracker" : {
          "web" : "https://github.com/Sereal/Sereal/issues"
@@ -55,5 +55,5 @@
          "url" : "git://github.com/Sereal/Sereal.git"
       }
    },
-   "version" : "2.00_03"
+   "version" : "2.01"
 }
