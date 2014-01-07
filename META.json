@@ -28,7 +28,7 @@
             "File::Path" : "0",
             "File::Spec" : "0",
             "Scalar::Util" : "0",
-            "Sereal::Decoder" : "2.00",
+            "Sereal::Decoder" : "2.03",
             "Test::LongString" : "0",
             "Test::More" : "0.88",
             "Test::Warn" : "0"
@@ -55,5 +55,5 @@
          "url" : "git://github.com/Sereal/Sereal.git"
       }
    },
-   "version" : "2.02"
+   "version" : "2.03"
 }
