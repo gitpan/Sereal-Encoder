@@ -5,7 +5,7 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '2.03'; # Don't forget to update the TestCompat set for testing against installed decoders!
+our $VERSION = '2.04'; # Don't forget to update the TestCompat set for testing against installed decoders!
 
 # not for public consumption, just for testing.
 (my $num_version = $VERSION) =~ s/_//;
@@ -58,6 +58,8 @@ there is a discussion of the design objectives in
 L<https://github.com/Sereal/Sereal/blob/master/README.pod>, and the output
 of our benchmarks can be seen at
 L<https://github.com/Sereal/Sereal/wiki/Sereal-Comparison-Graphs>.
+For more information on getting the best performance out of Sereal, have a look
+at the L</"PERFORMANCE"> section below.
 
 =head1 CLASS METHODS
 
@@ -205,7 +207,7 @@ various caveats involved.
 
 =head3 no_shared_hashkeys
 
-When the C<no_shared_hashkeys> option is set ot a true value, then
+When the C<no_shared_hashkeys> option is set to a true value, then
 the encoder will disable the detection and elimination of repeated hash
 keys. This only has an effect for serializing structures containing hashes.
 By skipping the detection of repeated hash keys, performance goes up a bit,
@@ -217,7 +219,7 @@ Do not disable this unless you have a reason to.
 
 If this is option is enabled/true then Sereal will use a hash to encode duplicates
 of strings during serialization efficiently using (internal) backreferences. This
-has a peformance and memory penalty during encoding so it defaults to off.
+has a performance and memory penalty during encoding so it defaults to off.
 On the other hand, data structures with many duplicated strings will see a
 significant reduction in the size of the encoded form. Currently only strings
 longer than 3 characters will be deduped, however this may change in the future.
@@ -245,7 +247,7 @@ This option enables a mode of operation that is similar to I<dedupe_strings>
 and if both options are set, I<aliased_dedupe_strings> takes precedence.
 
 The behaviour of I<aliased_dedupe_strings> differs from I<dedupe_strings>
-in that the duplicate occurrances of strings are emitted as Perl language
+in that the duplicate occurrences of strings are emitted as Perl language
 level B<aliases> instead of as Sereal-internal backreferences. This means
 that using this option actually produces a different output data structure
 when decoding. The upshot is that with this option, the application
@@ -277,13 +279,24 @@ The functional interface that is equivalent to using C<new> and C<encode>.
 Expects a data structure to serialize as first argument, optionally followed
 by a hash reference of options (see documentation for C<new()>).
 
-The functional interface is marginally slower than the OO interface since
+The functional interface is quite a bit slower than the OO interface since
 it cannot reuse the encoder object.
 
 =head1 PERFORMANCE
 
+If you care about performance at all, then use the object-oriented interface
+instead of the functional interface. It's a significant difference in performance
+if you are serializing small data structures.
+
 The exact performance in time and space depends heavily on the data structure
-to be serialized. For ready-made comparison scripts, see the
+to be serialized. Often there is a trade-off between space and time. If in doubt,
+do your own testing and most importantly ALWAYS TEST WITH REAL DATA. If you
+care purely about speed at the expense of output size, you can use the
+C<no_shared_hashkeys> option for a small speed-up. If you need smaller output at
+the cost of higher CPU load and more memory used during encoding/decoding,
+try the C<dedupe_strings> option and enable Snappy compression.
+
+For ready-made comparison scripts, see the
 F<author_tools/bench.pl> and F<author_tools/dbench.pl> programs that are part
 of this distribution. Suffice to say that this library is easily competitive
 in both time and space efficiency with the best alternatives.
@@ -304,7 +317,7 @@ by including the original object). But C<FREEZE> can't return a list as with CBO
 This should not be any practical limitation whatsoever. Just return an array
 reference instead of a list.
 
-Here is a contrived example of a class implementing the C<FREEZE> / C<THAW> mechansim.
+Here is a contrived example of a class implementing the C<FREEZE> / C<THAW> mechanism.
 
   package
     File;
@@ -413,10 +426,10 @@ applies to HASH vs. HASHREF.
 Similar to how Sereal can represent arrays and hashes in a full and a compact
 form. For small integers (between -16 and +15 inclusive), Sereal emits only
 one byte including the encoding of the type of data. For larger integers,
-it can use either varints (positive only) or zigzag encoding, which can also
+it can use either variants (positive only) or zigzag encoding, which can also
 represent negative numbers. For a canonical mode, the space optimizations
 would have to be turned off and it would have to be explicitly specified
-whether varint or zigzag encoding is to be used for encoding positive
+whether variant or zigzag encoding is to be used for encoding positive
 integers.
 
 Perl may choose to retain multiple representations of a scalar. Specifically,
@@ -462,7 +475,7 @@ L<https://groups.google.com/forum/?fromgroups#!forum/sereal-announce>
 Sereal development list:
 L<https://groups.google.com/forum/?fromgroups#!forum/sereal-dev>
 
-=head1 AUTHORS
+=head1 AUTHORS AND CONTRIBUTORS
 
 Yves Orton E<lt>demerphq@gmail.comE<gt>
 
@@ -477,6 +490,8 @@ Rafaël Garcia-Suarez
 Tim Bunce
 
 Daniel Dragan E<lt>bulkdd@cpan.orgE<gt> (Windows support and bugfixes)
+
+Zefram
 
 Some inspiration and code was taken from Marc Lehmann's
 excellent L<JSON::XS> module due to obvious overlap in
