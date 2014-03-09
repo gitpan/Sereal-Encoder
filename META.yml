@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Sereal-Encoder
-version:            2.04
+version:            2.06
 abstract:           Fast, compact, powerful binary serialization
 author:
     - Steffen Mueller <smueller@cpan.org>, Yves Orton <yves@cpan.org>
@@ -15,7 +15,7 @@ build_requires:
     File::Path:         0
     File::Spec:         0
     Scalar::Util:       0
-    Sereal::Decoder:    2.03
+    Sereal::Decoder:    2.06
     Test::LongString:   0
     Test::More:         0.88
     Test::Warn:         0

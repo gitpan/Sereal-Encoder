@@ -188,6 +188,7 @@ srl_clear_seen_hashes(pTHX_ srl_encoder_t *enc)
 void
 srl_clear_encoder(pTHX_ srl_encoder_t *enc)
 {
+    /* TODO I think this could just be made an assert. */
     if (!SRL_ENC_HAVE_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY)) {
         warn("Sereal Encoder being cleared but in virgin state. That is unexpected.");
     }
@@ -257,9 +258,10 @@ srl_empty_encoder_struct(pTHX)
     enc->weak_seenhash = NULL;
     enc->str_seenhash = NULL;
     enc->ref_seenhash = NULL;
-    enc->freezeobj_svhash = NULL;
     enc->snappy_workmem = NULL;
     enc->string_deduper_hv = NULL;
+
+    enc->freezeobj_svhash = NULL;
     enc->sereal_string_sv = NULL;
 
     return enc;
@@ -383,7 +385,15 @@ srl_build_encoder_struct_alike(pTHX_ srl_encoder_t *proto)
 {
     srl_encoder_t *enc;
     enc = srl_empty_encoder_struct(aTHX);
+
+    /* Copy the configuration-type, non-ephemeral attributes */
     enc->flags = proto->flags;
+    enc->max_recursion_depth = proto->max_recursion_depth;
+    enc->snappy_threshold = proto->snappy_threshold;
+    if (expect_false(SRL_ENC_HAVE_OPTION(enc, SRL_F_ENABLE_FREEZE_SUPPORT))) {
+        enc->sereal_string_sv = newSVpvs("Sereal");
+    }
+
     DEBUG_ASSERT_BUF_SANE(enc);
     return enc;
 }
@@ -702,7 +712,9 @@ SRL_STATIC_INLINE srl_encoder_t *
 srl_prepare_encoder(pTHX_ srl_encoder_t *enc)
 {
     /* Check whether encoder is in use and create a new one on the
-     * fly if necessary. Should only happen in bizarre edge cases... hopefully. */
+     * fly if necessary. Should only happen in edge cases such as
+     * FREEZE hooks that serialize things using the same encoder
+     * object. */
     if (SRL_ENC_HAVE_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY)) {
         srl_encoder_t * const proto = enc;
         enc = srl_build_encoder_struct_alike(aTHX_ proto);
@@ -759,7 +771,7 @@ srl_reset_snappy_header_flag(srl_encoder_t *enc)
                               (*flags_and_version_byte & SRL_PROTOCOL_VERSION_MASK);
 }
 
-void
+srl_encoder_t *
 srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src, SV *user_header_src)
 {
     enc = srl_prepare_encoder(aTHX_ enc);
@@ -847,6 +859,7 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src, SV *user_header_src)
     /* NOT doing a
      *   SRL_ENC_RESET_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY);
      * here because we're relying on the SAVEDESTRUCTOR_X call. */
+    return enc;
 }
 
 SRL_STATIC_INLINE void
