@@ -110,7 +110,9 @@ sub dump_bless {
 
 sub short_string {
     die if length($_[0]) > SRL_MASK_SHORT_BINARY_LEN;
-    return chr(SRL_HDR_SHORT_BINARY_LOW + length($_[0])) . $_[0];
+    my $tag = SRL_HDR_SHORT_BINARY_LOW + length($_[0]);
+    $tag |= SRL_HDR_TRACK_FLAG if $_[1];
+    return pack("c a*",$tag,$_[0]);
 }
 
 sub integer {
@@ -234,7 +236,7 @@ sub setup_tests {
                   my $d = array_head(3);
                   my $pos = offset($d);
                   my $tag = $opt->{aliased_dedupe_strings} ? SRL_HDR_ALIAS : SRL_HDR_COPY;
-                  $d .= short_string("foooo") . chr($tag) . varint($pos)
+                  $d .= short_string("foooo",$opt->{aliased_dedupe_strings} ? 1 : 0) . chr($tag) . varint($pos)
                         . chr($tag) . varint($pos);
                   return $d;
               }
@@ -258,7 +260,7 @@ sub setup_tests {
                   my $tag = $opt->{aliased_dedupe_strings} ? SRL_HDR_ALIAS : SRL_HDR_COPY;
                   my $d = array_head(2) . hash_head(2) . short_string("foooo");
                   my $pos = offset($d);
-                  $d .= short_string("foooo") . hash_head(2)
+                  $d .= short_string("foooo",$opt->{aliased_dedupe_strings} ? 1 : 0) . hash_head(2)
                         . short_string("foooo2")
                         . chr($tag) . varint($pos);
                   return $d;
@@ -719,18 +721,21 @@ sub run_roundtrip_tests_internal {
     my $encoder = Sereal::Encoder->new($opt);
 
     foreach my $meth (
-                      ['functional',
-                        sub {Sereal::Encoder::encode_sereal(shift, $opt)},
-                        sub {Sereal::Decoder::decode_sereal(shift, $opt)}],
+                      ['functional simple',
+                        sub {Sereal::Encoder::encode_sereal($_[0], $opt)},
+                        sub {Sereal::Decoder::decode_sereal($_[0], $opt)}],
                       ['object-oriented',
-                        sub {$encoder->encode(shift)},
-                        sub {$decoder->decode(shift)}],
+                        sub {$encoder->encode($_[0])},
+                        sub {$decoder->decode($_[0])}],
+                      ['functional with object',
+                          sub {Sereal::Encoder::sereal_encode_with_object($encoder, $_[0])},
+                          sub {Sereal::Decoder::sereal_decode_with_object($decoder, $_[0])}],
                       ['header-body',
-                        sub {$encoder->encode(shift, 123456789)}, # header data is abitrary to stand out for debugging
-                        sub {$decoder->decode(shift)}],
+                        sub {$encoder->encode($_[0], 123456789)}, # header data is abitrary to stand out for debugging
+                        sub {$decoder->decode($_[0])}],
                       ['header-only',
-                        sub {$encoder->encode(987654321, shift)}, # body data is abitrary to stand out for debugging
-                        sub {$decoder->decode_only_header(shift)}],
+                        sub {$encoder->encode(987654321, $_[0])}, # body data is abitrary to stand out for debugging
+                        sub {$decoder->decode_only_header($_[0])}],
                       )
     {
         my ($mname, $enc, $dec) = @$meth;

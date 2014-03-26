@@ -5,15 +5,15 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '2.06'; # Don't forget to update the TestCompat set for testing against installed decoders!
+our $VERSION = '2.07_01'; # Don't forget to update the TestCompat set for testing against installed decoders!
 
 # not for public consumption, just for testing.
 (my $num_version = $VERSION) =~ s/_//;
-my $TestCompat = [ map sprintf("%.2f", $_/100), reverse( 200 .. int($num_version * 100) ) ]; # compat with 2.00 to ...
+my $TestCompat = [ map sprintf("%.2f", $_/100), reverse( 207 .. int($num_version * 100) ) ]; # compat with 2.07 to ...
 sub _test_compat {return(@$TestCompat, $VERSION)}
 
 use Exporter 'import';
-our @EXPORT_OK = qw(encode_sereal encode_sereal_with_header_data);
+our @EXPORT_OK = qw(encode_sereal encode_sereal_with_header_data sereal_encode_with_object);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 # export by default if run from command line
 our @EXPORT = ((caller())[1] eq '-e' ? @EXPORT_OK : ());
@@ -34,11 +34,15 @@ Sereal::Encoder - Fast, compact, powerful binary serialization
 
 =head1 SYNOPSIS
 
-  use Sereal::Encoder qw(encode_sereal);
+  use Sereal::Encoder qw(encode_sereal sereal_encode_with_object);
   
   my $encoder = Sereal::Encoder->new({...options...});
   my $out = $encoder->encode($structure);
-  # alternatively:
+  
+  # alternatively the functional interface:
+  $out = sereal_encode_with_object($encoder, $structure);
+  
+  # much slower functional interface with no persistent objects:
   $out = encode_sereal($structure, {... options ...});
 
 =head1 DESCRIPTION
@@ -47,6 +51,8 @@ This library implements an efficient, compact-output, and feature-rich
 serializer using a binary protocol called I<Sereal>.
 Its sister module L<Sereal::Decoder> implements a decoder for this format.
 The two are released separately to allow for independent and safer upgrading.
+If you care greatly about performance, consider reading the L<Sereal::Performance>
+documentation after finishing this document.
 
 The Sereal protocol version emitted by this encoder implementation is currently
 protocol version 2 by default.
@@ -273,20 +279,33 @@ L<Sereal::Decoder>.
 
 =head1 EXPORTABLE FUNCTIONS
 
+=head2 sereal_encode_with_object
+
+The functional interface that is equivalent to using C<encode>.  Takes an
+encoder object reference as first argument, followed by a data structure
+to serialize.
+
+This functional interface is marginally faster than the OO interface
+since it avoids method resolution overhead and, on sufficiently modern
+Perl versions, can usually avoid subroutine call overhead.
+
 =head2 encode_sereal
 
 The functional interface that is equivalent to using C<new> and C<encode>.
 Expects a data structure to serialize as first argument, optionally followed
 by a hash reference of options (see documentation for C<new()>).
 
-The functional interface is quite a bit slower than the OO interface since
+This functional interface is significantly slower than the OO interface since
 it cannot reuse the encoder object.
 
 =head1 PERFORMANCE
 
-If you care about performance at all, then use the object-oriented interface
-instead of the functional interface. It's a significant difference in performance
-if you are serializing small data structures.
+See L<Sereal::Performance> for detailed considerations on performance
+tuning. Let it just be said that:
+
+B<If you care about performance at all, then use L</sereal_encode_with_object> or the
+OO interface instead of L</encode_sereal>. It's a significant difference
+in performance if you are serializing small data structures.>
 
 The exact performance in time and space depends heavily on the data structure
 to be serialized. Often there is a trade-off between space and time. If in doubt,
@@ -492,6 +511,8 @@ Tim Bunce
 Daniel Dragan E<lt>bulkdd@cpan.orgE<gt> (Windows support and bugfixes)
 
 Zefram
+
+Borislav Nikolov
 
 Some inspiration and code was taken from Marc Lehmann's
 excellent L<JSON::XS> module due to obvious overlap in
