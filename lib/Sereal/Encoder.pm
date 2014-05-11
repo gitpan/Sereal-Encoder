@@ -5,7 +5,7 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '2.11'; # Don't forget to update the TestCompat set for testing against installed decoders!
+our $VERSION = '2.12'; # Don't forget to update the TestCompat set for testing against installed decoders!
 our $XS_VERSION = $VERSION; $VERSION= eval $VERSION;
 
 # not for public consumption, just for testing.
@@ -435,7 +435,7 @@ Sereal represents a reference to an array as a sequence of
 tags which, in its simplest form, reads I<REF, ARRAY $array_length TAG1 TAG2 ...>.
 The separation of "REF" and "ARRAY" is necessary to properly implement all of
 Perl's referencing and aliasing semantics correctly. Quite frequently, however,
-your array is only reference once and plainly so. If it's also at most 15 elements
+your array is only referenced once and plainly so. If it's also at most 15 elements
 long, Sereal optimizes all of the "REF" and "ARRAY" tags, as well as the length
 into a special one byte ARRAYREF tag. This is a very significant optimization
 for common cases. This, however, does mean that most arrays up to 15 elements
