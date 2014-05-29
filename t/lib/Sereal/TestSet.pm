@@ -143,9 +143,10 @@ sub varint {
 our $PROTO_VERSION;
 
 sub Header {
-    my $proto_version = shift || $PROTO_VERSION;
+    my $proto_version = shift || $PROTO_VERSION || SRL_PROTOCOL_VERSION;
     my $user_data_blob = shift;
-    my $hdr_base = SRL_MAGIC_STRING . chr($proto_version||SRL_PROTOCOL_VERSION);
+    my $mgc = $proto_version > 2 ? SRL_MAGIC_STRING_HIGHBIT : SRL_MAGIC_STRING;
+    my $hdr_base = $mgc . chr($proto_version);
     if (defined $user_data_blob) {
         return $hdr_base . varint(1 + length($user_data_blob)) . chr(1) . $user_data_blob;
     }
@@ -578,6 +579,12 @@ my $lots_of_9C = do {
 my $max_iv = ~0 >> 1;
 my $min_iv = do {use integer; -$max_iv-1}; # 2s complement assumption
 
+my $eng0e0= "0e0";
+my $eng0e1= "0e1";
+my $eng2= "1e3";
+
+my $sum= $eng0e0 + $eng0e1 + $eng2;
+
 our @ScalarRoundtripTests = (
     # name, structure
     ["undef", undef],
@@ -599,6 +606,7 @@ our @ScalarRoundtripTests = (
             0x7FFFFFFF, 0x80000000, 0x80000001, 0xFFFFFFFF, 0xDEADBEEF,
             # UV bounds
             $max_iv_p1, $max_uv_m1, $max_uv, $lots_of_9C,
+            $eng0e0, $eng0e1, $eng2,
         )
     ),
 
@@ -643,7 +651,7 @@ our @ScalarRoundtripTests = (
         'bop \'x\\x'    =>"x\x{100}"   , 'bing' =>   "x\x{100}",
         x=>'y',}, z => 'p' ,   }   ,
         i    =>  '1' ,}, l=>" \10", m=>"\10 ", n => " \10 ",
-        o => undef ,p=>undef,
+        o => undef ,p=>undef, q=>\undef, r=>\$eng0e0, u => \$eng0e1, w=>\$eng2
     }],
     ['var strings', [ "\$", "\@", "\%" ]],
     [ "quote keys", { "" => '"', "'" => "" }],
@@ -658,6 +666,8 @@ our @ScalarRoundtripTests = (
     [ "ref to undef", \undef],
     [ "negative big num", -4123456789],
     [ "positive big num", 4123456789],
+    [ "eng-ref", [\$eng0e0, \$eng0e1, \$eng2] ],
+    [ "undef", [\undef, \undef] ],
 );
 
 use Storable qw(dclone);
@@ -692,22 +702,37 @@ if (eval "use Array::RefElem (av_store hv_store); 1") {
 
 sub run_roundtrip_tests {
     my ($proto_version) = @_;
-    my @proto_versions = ($proto_version ? ($proto_version) : qw(2 1));
+    my @proto_versions = ($proto_version ? ($proto_version) : (1 .. +SRL_PROTOCOL_VERSION));
 
     for my $proto_version ($proto_version) {
-        my $suffix = $proto_version == 1 ? "_v1" : "";
+        my $suffix = "_v$proto_version";
 
-        for my $opt (
-            ['plain',          {                  } ],
+        # name, options, min proto version, max proto version
+        my @variants = (
+            ['plain',          {                       } ],
             ['snappy',         { snappy           => 1 } ],
-            ['snappy_incr',    { snappy_incr      => 1 } ],
-            ['sort_keys',      { sort_keys        => 1 } ],
-            ['dedupe_strings', { dedupe_strings   => 1 } ],
-            ['freeze/thaw',    { freeze_callbacks => 1 } ],
-        ) {
-            my ($name, $opts) = @$opt;
+            ['snappy_incr',    { snappy_incr      => 1 }, 2 ],
+            ['zlib',           { compress         => Sereal::Encoder::SRL_ZLIB() }, 3 ],
+            ['zlib_force',     { compress         => Sereal::Encoder::SRL_ZLIB(), compress_threshold => 0 }, 3 ],
+            ['sort_keys',      { sort_keys        => 1 }, 2 ],
+            ['dedupe_strings', { dedupe_strings   => 1 }, 2 ],
+            ['freeze/thaw',    { freeze_callbacks => 1 }, 2 ],
+        );
+        for my $opt (@variants) {
+            my ($name, $opts, $min_proto_v, $max_proto_v) = @$opt;
             $name .= $suffix;
-            $opts->{use_protocol_v1} = 1 if $proto_version == 1;
+            next if ($min_proto_v && $proto_version < $min_proto_v)
+                 or ($max_proto_v && $proto_version > $max_proto_v);
+
+            if ($proto_version) {
+                if ($proto_version == 1) {
+                    $opts->{use_protocol_v1} = 1;
+                }
+                else {
+                    # v2 ignores this, but will output v2 by default
+                    $opts->{protocol_version} = $proto_version;
+                }
+            }
             $PROTO_VERSION= $proto_version;
             setup_tests();
             run_roundtrip_tests_internal($name, $opts);
@@ -743,6 +768,7 @@ sub run_roundtrip_tests_internal {
 
         foreach my $rt (@RoundtripTests) {
             my ($name, $data) = @$rt;
+
             my $encoded;
             eval {$encoded = $enc->($data); 1}
                 or do {

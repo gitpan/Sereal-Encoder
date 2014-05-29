@@ -22,7 +22,7 @@ my $indent = "";
 my %const_names = map {$_ => eval "$_"} @Sereal::Constants::EXPORT_OK;
 
 sub parse_header {
-  $data =~ s/^(=srl)(.)// or die "invalid header: $data";
+  $data =~ s/^(=[s\xF3]rl)(.)// or die "invalid header: $data";
   $done .= $1 . $2;
   my $flags = $2;
   my $len = varint();
@@ -44,9 +44,13 @@ sub parse_header {
   else {
     print "Empty Header.\n";
   }
+
   my $encoding= ord($flags) & SRL_PROTOCOL_ENCODING_MASK;
 
-  if ($encoding == SRL_PROTOCOL_ENCODING_SNAPPY) {
+  printf "%i %i %i\n", $encoding, ord(SRL_PROTOCOL_ENCODING_MASK), ord($flags);
+  if ($encoding == SRL_PROTOCOL_ENCODING_RAW) {
+    print "Header says: Document body is uncompressed.\n";
+  } elsif ($encoding == SRL_PROTOCOL_ENCODING_SNAPPY) {
     print "Header says: Document body is Snappy-compressed.\n";
     require Compress::Snappy;
     my $out = Compress::Snappy::decompress($data);
@@ -57,7 +61,14 @@ sub parse_header {
     require Compress::Snappy;
     my $out = Compress::Snappy::decompress($data);
     $data = $out;
-  } elsif ($encoding) {
+  } elsif ($encoding == SRL_PROTOCOL_ENCODING_ZLIB) {
+    print "Header says: Document body is ZLIB-compressed.\n";
+    my $uncompressed_len = varint();
+    my $compressed_len = varint();
+    require Compress::Zlib;
+    my $out = Compress::Zlib::uncompress($data);
+    $data = $out;
+  } else {
     die "Invalid encoding '" . ($encoding >> SRL_PROTOCOL_VERSION_BITS) . "'";
   }
   $hlen= length($done);
@@ -158,6 +169,9 @@ sub parse_sv {
   elsif ($o == SRL_HDR_HASH) {
     printf "HASH";
     parse_hv($ind);
+  }
+  elsif ($o == SRL_HDR_CANONICAL_UNDEF) {
+    printf "CANONICAL_UNDEF\n";
   }
   elsif ($o == SRL_HDR_UNDEF) {
     printf "UNDEF\n";

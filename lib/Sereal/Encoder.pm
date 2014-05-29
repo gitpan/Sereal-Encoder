@@ -5,16 +5,30 @@ use warnings;
 use Carp qw/croak/;
 use XSLoader;
 
-our $VERSION = '2.12'; # Don't forget to update the TestCompat set for testing against installed decoders!
+our $VERSION = '3.000_001'; # Don't forget to update the TestCompat set for testing against installed decoders!
 our $XS_VERSION = $VERSION; $VERSION= eval $VERSION;
 
 # not for public consumption, just for testing.
 (my $num_version = $VERSION) =~ s/_//;
-my $TestCompat = [ map sprintf("%.2f", $_/100), reverse( 207 .. int($num_version * 100) ) ]; # compat with 2.07 to ...
+my $TestCompat = [ map sprintf("%.2f", $_/100), reverse( 300 .. int($num_version * 100) ) ]; # compat with 3.00 to ...
 sub _test_compat {return(@$TestCompat, $VERSION)}
 
+# Make sure to keep these constants in sync with the C code in srl_encoder.c.
+# I know they could be exported from C using things like ExtUtils::Constant,
+# but that's too much of a hassle for just three numbers.
+use constant SRL_UNCOMPRESSED => 0;
+use constant SRL_SNAPPY       => 1;
+use constant SRL_ZLIB         => 2;
+
 use Exporter 'import';
-our @EXPORT_OK = qw(encode_sereal encode_sereal_with_header_data sereal_encode_with_object);
+our @EXPORT_OK = qw(
+  encode_sereal
+  encode_sereal_with_header_data
+  sereal_encode_with_object
+  SRL_UNCOMPRESSED
+  SRL_SNAPPY
+  SRL_ZLIB
+);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 # export by default if run from command line
 our @EXPORT = ((caller())[1] eq '-e' ? @EXPORT_OK : ());
@@ -56,7 +70,7 @@ If you care greatly about performance, consider reading the L<Sereal::Performanc
 documentation after finishing this document.
 
 The Sereal protocol version emitted by this encoder implementation is currently
-protocol version 2 by default.
+protocol version 3 by default.
 
 The protocol specification and many other bits of documentation
 can be found in the github repository. Right now, the specification is at
@@ -79,7 +93,38 @@ encoder.
 Currently, the following options are recognized, none of them are on
 by default.
 
+=head3 compress
+
+If this option provided and true, compression of the document body is enabled.
+As of Sereal version 3, two different compression techniques are supported
+and can be enabled by setting C<compress> to the respective named
+constants (exportable from the C<Sereal::Encoder> module):
+Snappy (named constant: C<SRL_SNAPPY>),
+and Zlib (C<SRL_ZLIB>).
+For your convenience, there is also a C<SRL_UNCOMPRESSED>
+constant.
+
+If this option is set, then the Snappy-related options below
+are ignored. They are otherwise recognized for compatibility only.
+
+=head3 compress_threshold
+
+The size threshold (in bytes) of the uncompressed output below which
+compression is not even attempted even if enabled.
+Defaults to one kilobyte (1024 bytes). Set this to 0 and C<compress> to
+a non-zero value to always attempt to compress.
+Note that the document will not be compressed if the resulting size
+will be bigger than the original size (even if C<compress_threshold> is 0).
+
+=head3 compress_level
+
+If Zlib compression is used, then this option will set a compression
+level from 1 (fastest) to 9 (best). Defaults to 6.
+
 =head3 snappy
+
+See also the C<compress> option. This option is provided only for
+compatibility with Sereal V1.
 
 If set, the main payload of the Sereal document will be compressed using
 Google's Snappy algorithm. This can yield anywhere from no effect
@@ -90,26 +135,29 @@ The decoder (version 0.04 and up) will know how to handle Snappy-compressed
 Sereal documents transparently.
 
 B<Note:> The C<snappy_incr> and C<snappy> options are identical in
-Sereal protocol V2 (the default). If using the C<use_protocol_v1> option
+Sereal protocol v2 and up (so by default). If using an older protocol version
+(see C<protocol_version> and C<use_protocol_v1> options below)
 to emit Sereal V1 documents, this emits non-incrementally decodable
 documents. See C<snappy_incr> in those cases.
 
 =head3 snappy_incr
 
-Same as the C<snappy> option for default (Sereal V2) operation.
+See also the C<compress> option. This option is provided only for
+compatibility with Sereal V1.
 
-In Sereal V1, enables a version of the snappy protocol which is suitable for
+Same as the C<snappy> option for default operation (that is in Sereal v2 or up).
+
+In Sereal V1, enables a version of the Snappy protocol which is suitable for
 incremental parsing of packets. See also the C<snappy> option above for
 more details.
 
 =head3 snappy_threshold
 
-The size threshold (in bytes) of the uncompressed output below which
-snappy compression is not even attempted even if enabled.
-Defaults to one kilobyte (1024 bytes). Set to 0 and C<snappy> to enabled
-to always compress.
-Note that the document will not be compressed if the resulting size
-will be bigger than the original size (even if snappy_threshold is 0).
+See also the C<compress> option. This option is provided only for
+compatibility with Sereal V1.
+
+This option is a synonym for the C<compress_threshold> option,
+but only if Snappy compression is enabled.
 
 =head3 croak_on_bless
 
@@ -126,7 +174,7 @@ C<no_bless_objects>.
 
 =head3 freeze_callbacks
 
-This option is new in Sereal v2 and needs a Sereal v2 decoder.
+This option was introduced in Sereal v2 and needs a Sereal v2 decoder.
 
 If this option is set, the encoder will check for and possibly invoke
 the C<FREEZE> method on any object in the input data. An object that
@@ -264,7 +312,19 @@ but at the cost of potential action at a distance due to the aliasing.
 I<Beware:> The test suite currently does not cover this option as well as it
 probably should. Patches welcome.
 
+=head3 protocol_version
+
+Specifies the version of the Sereal protocol to emit. Valid are integers
+between 1 and the current version. If not specified, the most recent protocol
+version will be used. See also C<use_protocol_v1>:
+
+It is strongly advised to use the latest protocol version outside of
+migration periods.
+
 =head3 use_protocol_v1
+
+This option is deprecated in favour of the C<protocol_version> option (see
+above).
 
 If set, the encoder will emit Sereal documents following protocol version 1.
 This is strongly discouraged except for temporary
@@ -276,15 +336,20 @@ compatibility/migration purposes.
 
 Given a Perl data structure, serializes that data structure and returns a
 binary string that can be turned back into the original data structure by
-L<Sereal::Decoder>.
+L<Sereal::Decoder>. The method expects a data structure to serialize as first
+argument, optionally followed by a header data structure.
+
+A header is intended for embedding small amounts of meta data, such as routing
+information, in a document that allows users to avoid deserializing main body
+needlessly.
 
 =head1 EXPORTABLE FUNCTIONS
 
 =head2 sereal_encode_with_object
 
-The functional interface that is equivalent to using C<encode>.  Takes an
+The functional interface that is equivalent to using C<encode>. Takes an
 encoder object reference as first argument, followed by a data structure
-to serialize.
+and optional header to serialize.
 
 This functional interface is marginally faster than the OO interface
 since it avoids method resolution overhead and, on sufficiently modern
@@ -295,6 +360,18 @@ Perl versions, can usually avoid subroutine call overhead.
 The functional interface that is equivalent to using C<new> and C<encode>.
 Expects a data structure to serialize as first argument, optionally followed
 by a hash reference of options (see documentation for C<new()>).
+
+This function cannot be used for encoding a data structure with a header.
+See C<encode_sereal_with_header_data>.
+
+This functional interface is significantly slower than the OO interface since
+it cannot reuse the encoder object.
+
+=head2 encode_sereal_with_header_data
+
+The functional interface that is equivalent to using C<new> and C<encode>.
+Expects a data structure and a header to serialize as first and second arguments,
+optionally followed by a hash reference of options (see documentation for C<new()>).
 
 This functional interface is significantly slower than the OO interface since
 it cannot reuse the encoder object.
@@ -514,6 +591,8 @@ Daniel Dragan E<lt>bulkdd@cpan.orgE<gt> (Windows support and bugfixes)
 Zefram
 
 Borislav Nikolov
+
+Ivan Kruglov E<lt>ivan.kruglov@yahoo.comE<gt>
 
 Some inspiration and code was taken from Marc Lehmann's
 excellent L<JSON::XS> module due to obvious overlap in

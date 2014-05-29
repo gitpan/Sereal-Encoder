@@ -44,7 +44,7 @@
     FLOAT             | "\"" |  34 | 0x22 | 0b00100010 | <IEEE-FLOAT>
     DOUBLE            | "#"  |  35 | 0x23 | 0b00100011 | <IEEE-DOUBLE>
     LONG_DOUBLE       | "\$" |  36 | 0x24 | 0b00100100 | <IEEE-LONG-DOUBLE>
-    UNDEF             | "%"  |  37 | 0x25 | 0b00100101 | None - Perl undef
+    UNDEF             | "%"  |  37 | 0x25 | 0b00100101 | None - Perl undef var; eg my $var= undef;
     BINARY            | "&"  |  38 | 0x26 | 0b00100110 | <LEN-VARINT> <BYTES> - binary/(latin1) string
     STR_UTF8          | "'"  |  39 | 0x27 | 0b00100111 | <LEN-VARINT> <UTF8> - utf8 string
     REFN              | "("  |  40 | 0x28 | 0b00101000 | <ITEM-TAG>    - ref to next item
@@ -63,8 +63,8 @@
     RESERVED_1        | "5"  |  53 | 0x35 | 0b00110101 |
     RESERVED_2        | "6"  |  54 | 0x36 | 0b00110110 |
     RESERVED_3        | "7"  |  55 | 0x37 | 0b00110111 |
-    RESERVED_4        | "8"  |  56 | 0x38 | 0b00111000 |
-    RESERVED_5        | "9"  |  57 | 0x39 | 0b00111001 | reserved
+    RESERVED_4        | "8"  |  56 | 0x38 | 0b00111000 | reserved
+    CANONICAL_UNDEF   | "9"  |  57 | 0x39 | 0b00111001 | undef (PL_sv_undef) - "the" Perl undef (see notes)
     FALSE             | ":"  |  58 | 0x3a | 0b00111010 | false (PL_sv_no)
     TRUE              | ";"  |  59 | 0x3b | 0b00111011 | true  (PL_sv_yes)
     MANY              | "<"  |  60 | 0x3c | 0b00111100 | <LEN-VARINT> <TYPE-BYTE> <TAG-DATA> - repeated tag (not done yet, will be implemented in version 3)
@@ -140,11 +140,16 @@
 */
 
 /* magic string, protocol version and encoding information */
-#define SRL_MAGIC_STRING                "=srl"          /* Magic string for header. Every packet starts with this */
+#define SRL_MAGIC_STRING                "=srl"          /* Magic string for header. Every packet starts with this or "=\xF3rl",
+                                                         * which is the high-bit-set-on-the-"s" equivalent. */
+#define SRL_MAGIC_STRING_HIGHBIT        "=\xF3rl"       /* Magic string for header, with high bit set for UTF8 sanity check. */
 #define SRL_MAGIC_STRLEN                4               /* Length of SRL_MAGIC_STRING */
 #define SRL_MAGIC_STRING_LILIPUTIAN     0x6c72733d      /* SRL_MAGIC_STRING as a little endian integer */
 
-#define SRL_PROTOCOL_VERSION            ( 2 )
+#define SRL_MAGIC_STRING_HIGHBIT_UTF8   "=\xC3\xB3rl"   /* Magic string for header, corrupted by accidental UTF8 encoding */
+#define SRL_MAGIC_STRLEN_HIGHBIT_UTF8   5               /* Length of SRL_MAGIC_STRING_HIGHBIT_UTF8 */
+
+#define SRL_PROTOCOL_VERSION            ( 3 )
 #define SRL_PROTOCOL_VERSION_BITS       ( 4 )           /* how many bits we use for the version, the rest go to the encoding */
 #define SRL_PROTOCOL_VERSION_MASK       ( ( 1 << SRL_PROTOCOL_VERSION_BITS ) - 1 )
 
@@ -152,6 +157,7 @@
 #define SRL_PROTOCOL_ENCODING_RAW       ( 0 << SRL_PROTOCOL_VERSION_BITS )
 #define SRL_PROTOCOL_ENCODING_SNAPPY    ( 1 << SRL_PROTOCOL_VERSION_BITS )
 #define SRL_PROTOCOL_ENCODING_SNAPPY_INCREMENTAL    ( 2 << SRL_PROTOCOL_VERSION_BITS )
+#define SRL_PROTOCOL_ENCODING_ZLIB      ( 3 << SRL_PROTOCOL_VERSION_BITS )
 
 /* Bits in the header bitfield */
 #define SRL_PROTOCOL_HDR_USER_DATA      ( 1 )
@@ -179,7 +185,7 @@
 #define SRL_HDR_FLOAT           ((char)34)      /* <IEEE-FLOAT> */
 #define SRL_HDR_DOUBLE          ((char)35)      /* <IEEE-DOUBLE> */
 #define SRL_HDR_LONG_DOUBLE     ((char)36)      /* <IEEE-LONG-DOUBLE> */
-#define SRL_HDR_UNDEF           ((char)37)      /* None - Perl undef */
+#define SRL_HDR_UNDEF           ((char)37)      /* None - Perl undef var; eg my $var= undef; */
 #define SRL_HDR_BINARY          ((char)38)      /* <LEN-VARINT> <BYTES> - binary/(latin1) string */
 #define SRL_HDR_STR_UTF8        ((char)39)      /* <LEN-VARINT> <UTF8> - utf8 string */
 
@@ -202,8 +208,9 @@
  *       them, might have to explicit == check later. */
 #define SRL_HDR_RESERVED        ((char)52)      /* reserved */
 #define SRL_HDR_RESERVED_LOW    ((char)52)
-#define SRL_HDR_RESERVED_HIGH   ((char)57)
+#define SRL_HDR_RESERVED_HIGH   ((char)56)
 
+#define SRL_HDR_CANONICAL_UNDEF ((char)57)      /* undef (PL_sv_undef) - "the" Perl undef (see notes) */
 #define SRL_HDR_FALSE           ((char)58)      /* false (PL_sv_no)  */
 #define SRL_HDR_TRUE            ((char)59)      /* true  (PL_sv_yes) */
 

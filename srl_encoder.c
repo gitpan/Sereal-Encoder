@@ -53,6 +53,7 @@ extern "C" {
 #include "srl_buffer.h"
 
 #include "snappy/csnappy_compress.c"
+#include "miniz.h"
 
 /* The ENABLE_DANGEROUS_HACKS (passed through from ENV via Makefile.PL) enables
  * optimizations that may make the code so cozy with a particular version of the
@@ -128,33 +129,103 @@ SRL_STATIC_INLINE srl_encoder_t *srl_dump_data_structure(pTHX_ srl_encoder_t *en
                                         ? srl_init_freezeobj_svhash(enc)      \
                                         : (enc)->freezeobj_svhash )
 
-#define CALL_SRL_DUMP_SV(enc, src) STMT_START {                         \
-    if (!(src)) {                                                       \
-        srl_buf_cat_char((enc), SRL_HDR_UNDEF);                         \
-    }                                                                   \
-    else                                                                \
-    if (SvTYPE((src)) < SVt_PVMG &&                                     \
-        SvREFCNT((src)) == 1 &&                                         \
-        !SvROK((src))                                                   \
-    ) {                                                                 \
-        if (SvPOKp((src))) {                                            \
-            srl_dump_svpv(aTHX_ (enc), (src));                          \
+#ifndef MAX_CHARSET_NAME_LENGTH
+#    define MAX_CHARSET_NAME_LENGTH 2
+#endif
+
+#if PERL_VERSION == 10
+/*
+	Apparently regexes in 5.10 are "modern" but with 5.8 internals
+*/
+#    define RXf_PMf_STD_PMMOD_SHIFT 12
+#    define RX_EXTFLAGS(re)	((re)->extflags)
+#    define RX_PRECOMP(re) ((re)->precomp)
+#    define RX_PRELEN(re) ((re)->prelen)
+
+/* Maybe this is only on OS X, where SvUTF8(sv) exists but looks at flags that don't exist */
+#    define RX_UTF8(re) (RX_EXTFLAGS(re) & RXf_UTF8)
+
+#elif defined(SvRX)
+#    define MODERN_REGEXP
+     /* With commit 8d919b0a35f2b57a6bed2f8355b25b19ac5ad0c5 (perl.git) and
+      * release 5.17.6, regular expression are no longer SvPOK (IOW are no longer
+      * considered to be containing a string).
+      * This breaks some of the REGEXP detection logic in srl_dump_sv, so
+      * we need yet another CPP define. */
+#    if PERL_VERSION > 17 || (PERL_VERSION == 17 && PERL_SUBVERSION >= 6)
+#        define REGEXP_NO_LONGER_POK
+#    endif
+#else
+#    define INT_PAT_MODS "msix"
+#    define RXf_PMf_STD_PMMOD_SHIFT 12
+#    define RX_PRECOMP(re) ((re)->precomp)
+#    define RX_PRELEN(re) ((re)->prelen)
+#    define RX_UTF8(re) ((re)->reganch & ROPT_UTF8)
+#    define RX_EXTFLAGS(re) ((re)->reganch)
+#    define RXf_PMf_COMPILETIME  PMf_COMPILETIME
+#endif
+
+#if defined(MODERN_REGEXP) && !defined(REGEXP_NO_LONGER_POK)
+#define DO_POK_REGEXP(enc, src, svt)                                    \
+        /* Only need to enter here if we have rather modern regexps,*/  \
+        /* but they're still POK (pre 5.17.6). */                       \
+        if (expect_false( svt == SVt_REGEXP ) ) {                       \
+            srl_dump_regexp(aTHX_ enc, src);                            \
         }                                                               \
-        else                                                            \
-        if (SvNOKp((src))) {                                            \
-            /* dump floats */                                           \
-            srl_dump_nv(aTHX_ (enc), (src));                            \
-        }                                                               \
-        else                                                            \
-        if (SvIOKp((src))) {                                            \
-            /* dump ints */                                             \
-            srl_dump_ivuv(aTHX_ (enc), (src));                          \
+        else
+#else
+#define DO_POK_REGEXP(enc,src) /*no-op*/
+#endif
+
+#define _SRL_IF_SIMPLE_DIRECT_DUMP_SV(enc, src, svt)                    \
+    if (SvIOK(src)) {                                                   \
+    /* if its an integer its an integer */                              \
+        if (SvNOK(src) && SvPOK(src)) {                                 \
+            /* as far as I can tell the only strings which      */      \
+            /* set all three flags are engineering notation,    */      \
+            /* like "0E0" and friends - we especially need      */      \
+            /* to do this when the IV is 0, but we do it always */      \
+            /* if they put eng notation in, maybe then want it  */      \
+            /* out too. */                                              \
+            /* dump the string form */                                  \
+            srl_dump_svpv(aTHX_ enc, src);                              \
         }                                                               \
         else {                                                          \
+            /* dump ints */                                             \
+            srl_dump_ivuv(aTHX_ enc, src);                              \
+        }                                                               \
+    }                                                                   \
+    else                                                                \
+    /* if its a float then its a float */                               \
+    if (SvNOK(src)) {                                                   \
+        /* dump floats */                                               \
+        srl_dump_nv(aTHX_ enc, src);                                    \
+    }                                                                   \
+    else                                                                \
+    /* if its POK now, then it must be a string */                      \
+    if (SvPOK(src)) {                                                   \
+        DO_POK_REGEXP(enc,src,svt)                                      \
+        srl_dump_svpv(aTHX_ enc, src);                                  \
+    }
+
+#define CALL_SRL_DUMP_SV(enc, src) STMT_START {                         \
+    if (!(src)) {                                                       \
+        srl_buf_cat_char((enc), SRL_HDR_CANONICAL_UNDEF); /* is this right? */ \
+    }                                                                   \
+    else                                                                \
+    {                                                                   \
+        svtype svt= SvTYPE((src));                                      \
+        if (svt < SVt_PVMG &&                                           \
+            SvREFCNT((src)) == 1 &&                                     \
+            !SvROK((src))                                               \
+        ) {                                                             \
+            _SRL_IF_SIMPLE_DIRECT_DUMP_SV(enc, src, svt)                \
+            else {                                                      \
+                srl_dump_sv(aTHX_ (enc), (src));                        \
+            }                                                           \
+        } else {                                                        \
             srl_dump_sv(aTHX_ (enc), (src));                            \
         }                                                               \
-    } else {                                                            \
-        srl_dump_sv(aTHX_ (enc), (src));                                \
     }                                                                   \
 } STMT_END
 
@@ -258,6 +329,7 @@ srl_empty_encoder_struct(pTHX)
      * something nasty if it's unused. */
     enc->tmp_buf.start = NULL;
 
+    enc->protocol_version = SRL_PROTOCOL_VERSION;
     enc->recursion_depth = 0;
     enc->max_recursion_depth = DEFAULT_MAX_RECUR_DEPTH;
     enc->operational_flags = 0;
@@ -288,16 +360,30 @@ srl_build_encoder_struct(pTHX_ HV *opt)
     /* load options */
     if (opt != NULL) {
         int undef_unknown = 0;
-        int snappy_nonincr = 0;
+        int compression_format = 0;
         /* SRL_F_SHARED_HASHKEYS on by default */
         svp = hv_fetchs(opt, "no_shared_hashkeys", 0);
         if ( !svp || !SvTRUE(*svp) )
             SRL_ENC_SET_OPTION(enc, SRL_F_SHARED_HASHKEYS);
 
         /* Needs to be before the snappy options */
-        svp = hv_fetchs(opt, "use_protocol_v1", 0);
-        if ( svp && SvTRUE(*svp) )
-            SRL_ENC_SET_OPTION(enc, SRL_F_USE_PROTO_V1);
+        /* enc->protocol_version defaults to SRL_PROTOCOL_VERSION. */
+        svp = hv_fetchs(opt, "protocol_version", 0);
+        if (svp && SvOK(*svp)) {
+            enc->protocol_version = SvUV(*svp);
+            if (enc->protocol_version < 1
+                || enc->protocol_version > SRL_PROTOCOL_VERSION)
+            {
+                croak("Specified Sereal protocol version ('%lu') is invalid",
+                      (unsigned long)enc->protocol_version);
+            }
+        }
+        else {
+            /* Compatibility with the old way to specify older protocol version */
+            svp = hv_fetchs(opt, "use_protocol_v1", 0);
+            if ( svp && SvTRUE(*svp) )
+                enc->protocol_version = 1;
+        }
 
         svp = hv_fetchs(opt, "croak_on_bless", 0);
         if ( svp && SvTRUE(*svp) )
@@ -316,22 +402,55 @@ srl_build_encoder_struct(pTHX_ HV *opt)
             enc->sereal_string_sv = newSVpvs("Sereal");
         }
 
-        svp = hv_fetchs(opt, "snappy", 0);
-        if ( svp && SvTRUE(*svp) ) {
-            /* incremental is the new black in V2 */
-            if (expect_true( !SRL_ENC_HAVE_OPTION(enc, SRL_F_USE_PROTO_V1) ))
+        svp = hv_fetchs(opt, "compress", 0);
+        if (svp) {
+            compression_format = SvIV(*svp);
+
+            /* See also Encoder.pm's constants */
+            switch (compression_format) {
+            case 0: /* uncompressed */
+                break;
+            case 1:
                 SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL);
-            else {
-                snappy_nonincr = 1;
-                SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY);
+                break;
+            case 2:
+                SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_ZLIB);
+                if (enc->protocol_version < 3)
+                    croak("Zlib compression was introduced in protocol version 3 and you are asking for only version %i", (int)enc->protocol_version);
+
+                enc->compress_level = MZ_DEFAULT_COMPRESSION;
+                svp = hv_fetchs(opt, "compress_level", 0);
+                if ( svp && SvTRUE(*svp) ) {
+                    IV lvl = SvIV(*svp);
+                    if (expect_false( lvl < 1 || lvl > 10 )) /* Sekrit: compression lvl 10 is a miniz thing that doesn't exist in normal zlib */
+                        croak("'compress_level' needs to be between 1 and 9");
+                    enc->compress_level = lvl;
+                }
+                break;
+            default:
+                croak("Invalid Sereal compression format");
             }
         }
+        else {
+            /* Only bother with old compression options if necessary */
 
-        svp = hv_fetchs(opt, "snappy_incr", 0);
-        if ( svp && SvTRUE(*svp) ) {
-            if (snappy_nonincr)
-                croak("'snappy' and 'snappy_incr' options are mutually exclusive");
-            SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL);
+            svp = hv_fetchs(opt, "snappy_incr", 0);
+            if ( svp && SvTRUE(*svp) ) {
+                SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL);
+                compression_format = 1;
+            }
+             else {
+                /* snappy_incr >> snappy */
+                svp = hv_fetchs(opt, "snappy", 0);
+                if ( svp && SvTRUE(*svp) ) {
+                    /* incremental is the new black in V2 */
+                    if (expect_true( enc->protocol_version > 1 ))
+                        SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL);
+                    else
+                        SRL_ENC_SET_OPTION(enc, SRL_F_COMPRESS_SNAPPY);
+                    compression_format = 1;
+                }
+            }
         }
 
         svp = hv_fetchs(opt, "undef_unknown", 0);
@@ -368,11 +487,19 @@ srl_build_encoder_struct(pTHX_ HV *opt)
                 SRL_ENC_SET_OPTION(enc, SRL_F_NOWARN_UNKNOWN_OVERLOAD);
         }
 
-        svp = hv_fetchs(opt, "snappy_threshold", 0);
-        if ( svp && SvOK(*svp) )
-            enc->snappy_threshold = SvIV(*svp);
-        else
-            enc->snappy_threshold = 1024;
+
+        if (compression_format) {
+            enc->compress_threshold = 1024;
+            svp = hv_fetchs(opt, "compress_threshold", 0);
+            if ( svp && SvOK(*svp) )
+                enc->compress_threshold = SvIV(*svp);
+            else if (compression_format == 1) {
+                /* compression_format==1 is some sort of Snappy */
+                svp = hv_fetchs(opt, "snappy_threshold", 0);
+                if ( svp && SvOK(*svp) )
+                    enc->compress_threshold = SvIV(*svp);
+            }
+        }
 
         svp = hv_fetchs(opt, "max_recursion_depth", 0);
         if ( svp && SvTRUE(*svp))
@@ -397,10 +524,11 @@ srl_build_encoder_struct_alike(pTHX_ srl_encoder_t *proto)
     /* Copy the configuration-type, non-ephemeral attributes */
     enc->flags = proto->flags;
     enc->max_recursion_depth = proto->max_recursion_depth;
-    enc->snappy_threshold = proto->snappy_threshold;
+    enc->compress_threshold = proto->compress_threshold;
     if (expect_false(SRL_ENC_HAVE_OPTION(enc, SRL_F_ENABLE_FREEZE_SUPPORT))) {
         enc->sereal_string_sv = newSVpvs("Sereal");
     }
+    enc->protocol_version = proto->protocol_version;
 
     DEBUG_ASSERT_BUF_SANE(enc);
     return enc;
@@ -459,20 +587,25 @@ void
 srl_write_header(pTHX_ srl_encoder_t *enc, SV *user_header_src)
 {
     /* 4th to 8th bit are flags. Using 4th for snappy flag. FIXME needs to go in spec. */
-    const U8 version_and_flags = (SRL_ENC_HAVE_OPTION(enc, SRL_F_USE_PROTO_V1) ? 1 : SRL_PROTOCOL_VERSION)
-                                 | (
-                                    SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY)
-                                    ? SRL_PROTOCOL_ENCODING_SNAPPY
-                                    : SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL)
-                                    ? SRL_PROTOCOL_ENCODING_SNAPPY_INCREMENTAL
-                                    : SRL_PROTOCOL_ENCODING_RAW
-                                 );
+    const U8 flags = (
+                         SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY)
+                            ? SRL_PROTOCOL_ENCODING_SNAPPY
+                         : SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL)
+                            ? SRL_PROTOCOL_ENCODING_SNAPPY_INCREMENTAL
+                         : SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_ZLIB)
+                            ? SRL_PROTOCOL_ENCODING_ZLIB
+                         : SRL_PROTOCOL_ENCODING_RAW
+                     );
+    const U8 version_and_flags = (U8)enc->protocol_version | flags;
 
     /* 4 byte magic string + proto version
      * + potentially uncompressed size varint
      * +  1 byte varint that indicates zero-length header */
     BUF_SIZE_ASSERT(enc, sizeof(SRL_MAGIC_STRING) + 1 + 1);
-    srl_buf_cat_str_s_nocheck(enc, SRL_MAGIC_STRING);
+    if (LIKELY( enc->protocol_version > 2 ))
+      srl_buf_cat_str_s_nocheck(enc, SRL_MAGIC_STRING_HIGHBIT);
+    else
+      srl_buf_cat_str_s_nocheck(enc, SRL_MAGIC_STRING);
     srl_buf_cat_char_nocheck(enc, version_and_flags);
     if (user_header_src == NULL) {
         srl_buf_cat_char_nocheck(enc, '\0'); /* variable header length (0 right now) */
@@ -480,7 +613,7 @@ srl_write_header(pTHX_ srl_encoder_t *enc, SV *user_header_src)
     else {
         STRLEN user_data_len;
 
-        if (expect_false( SRL_ENC_HAVE_OPTION(enc, SRL_F_USE_PROTO_V1) ))
+        if (expect_false( enc->protocol_version < 2 ))
             croak("Cannot serialize user header data in Sereal protocol V1 mode!");
 
         /* Allocate tmp buffer for swapping if necessary,
@@ -766,11 +899,11 @@ srl_update_varint_from_to(pTHX_ char *varint_start, char *varint_end, UV number)
 }
 
 
-/* Resets the Snappy-compression header flag to OFF.
+/* Resets the compression header flag to OFF.
  * Obviously requires that a Sereal header was already written to the
  * encoder's output buffer. */
 SRL_STATIC_INLINE void
-srl_reset_snappy_header_flag(srl_encoder_t *enc)
+srl_reset_compression_header_flag(srl_encoder_t *enc)
 {
     /* sizeof(const char *) includes a count of \0 */
     char *flags_and_version_byte = enc->buf.start + sizeof(SRL_MAGIC_STRING) - 1;
@@ -784,13 +917,18 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src, SV *user_header_src)
 {
     enc = srl_prepare_encoder(aTHX_ enc);
 
-    if (expect_true( !SRL_ENC_HAVE_OPTION(enc, (SRL_F_COMPRESS_SNAPPY | SRL_F_COMPRESS_SNAPPY_INCREMENTAL)) )) {
+    if (expect_true(
+            !SRL_ENC_HAVE_OPTION(enc, (  SRL_F_COMPRESS_SNAPPY
+                                       | SRL_F_COMPRESS_SNAPPY_INCREMENTAL
+                                       | SRL_F_COMPRESS_ZLIB))
+       ))
+    {
         srl_write_header(aTHX_ enc, user_header_src);
         SRL_UPDATE_BODY_POS(enc);
         srl_dump_sv(aTHX_ enc, src);
         srl_fixup_weakrefs(aTHX_ enc);
     }
-    else {
+    else { /* Have some sort of compression */
         ptrdiff_t sereal_header_len;
         STRLEN uncompressed_body_length;
 
@@ -804,26 +942,38 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src, SV *user_header_src)
         assert(BUF_POS_OFS(enc->buf) > sereal_header_len);
         uncompressed_body_length = BUF_POS_OFS(enc->buf) - sereal_header_len;
 
-        if (enc->snappy_threshold > 0
-            && uncompressed_body_length < (STRLEN)enc->snappy_threshold)
+        if (uncompressed_body_length < (STRLEN)enc->compress_threshold)
         {
-            /* Don't bother with snappy compression at all if we have less than $threshold bytes of payload */
-            srl_reset_snappy_header_flag(enc);
+            /* Don't bother with compression at all if we have less than $threshold bytes of payload */
+            srl_reset_compression_header_flag(enc);
         }
-        else { /* do snappy compression of body */
+        else { /* Do Snappy or zlib compression of body */
+            const int is_snappy
+                = SRL_ENC_HAVE_OPTION(enc, (  SRL_F_COMPRESS_SNAPPY
+                                            | SRL_F_COMPRESS_SNAPPY_INCREMENTAL));
+            /* !is_snappy is the same as "is zlib" right now */
+
+            const int is_traditional_snappy
+                = (SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY));
+
             srl_buffer_t old_buf; /* TODO can we use the enc->tmp_buf here to avoid allocations? */
             char *varint_start= NULL;
             char *varint_end= NULL;
-            uint32_t dest_len;
+            size_t dest_len;
 
             /* Get uncompressed payload and total packet output (after compression) lengths */
-            dest_len = csnappy_max_compressed_length(uncompressed_body_length) + sereal_header_len + 1;
+            dest_len = sereal_header_len + 1
+                        + ( is_snappy ? (size_t)csnappy_max_compressed_length(uncompressed_body_length)
+                                      : (size_t)mz_compressBound(uncompressed_body_length)+SRL_MAX_VARINT_LENGTH );
 
-            /* Will have to embed compressed packet length as varint if in incremental mode */
-            if ( SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL ) )
+            /* Will have to embed compressed packet length as varint if not
+             * in traditional Snappy mode. (So needs to be added for any of
+             * ZLIB, or incremental Snappy.) */
+            if ( !is_traditional_snappy )
                 dest_len += SRL_MAX_VARINT_LENGTH;
 
-            srl_init_snappy_workmem(aTHX_ enc);
+            if (is_snappy)
+                srl_init_snappy_workmem(aTHX_ enc);
 
             /* Back up old buffer and allocate new one with correct size */
             srl_buf_copy_buffer(aTHX_ &enc->buf, &old_buf);
@@ -834,23 +984,45 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src, SV *user_header_src)
             enc->buf.pos += sereal_header_len;
             SRL_UPDATE_BODY_POS(enc); /* will do the right thing wrt. protocol V1 / V2 */
 
-            /* Embed compressed packet length */
-            if ( SRL_ENC_HAVE_OPTION(enc, SRL_F_COMPRESS_SNAPPY_INCREMENTAL ) ) {
+            /* Embed compressed packet length if Zlib */
+            if (!is_snappy)
+                srl_buf_cat_varint_nocheck(aTHX_ enc, 0, uncompressed_body_length);
+
+            /* Embed compressed packet length if incr. Snappy or Zlib*/
+            if (expect_true( !is_traditional_snappy )) {
                 varint_start= enc->buf.pos;
                 srl_buf_cat_varint_nocheck(aTHX_ enc, 0, dest_len);
                 varint_end= enc->buf.pos - 1;
             }
 
-            csnappy_compress(old_buf.start + sereal_header_len, (uint32_t)uncompressed_body_length, enc->buf.pos, &dest_len,
-                             enc->snappy_workmem, CSNAPPY_WORKMEM_BYTES_POWER_OF_TWO);
+            if (is_snappy) {
+                uint32_t len = (uint32_t)dest_len;
+                csnappy_compress(old_buf.start + sereal_header_len, (uint32_t)uncompressed_body_length, enc->buf.pos, &len,
+                                 enc->snappy_workmem, CSNAPPY_WORKMEM_BYTES_POWER_OF_TWO);
+                dest_len = (size_t)len;
+            }
+            else {
+                mz_ulong dl = (mz_ulong)dest_len;
+                int status = mz_compress2(
+                    (unsigned char *)enc->buf.pos,
+                    &dl,
+                    (const unsigned char *)(old_buf.start + sereal_header_len),
+                    (mz_ulong)uncompressed_body_length,
+                    enc->compress_level
+                );
+                (void)status;
+                assert(status == Z_OK);
+                dest_len = (size_t)dl;
+            }
+
             assert(dest_len != 0);
 
             /* If compression didn't help, swap back to old, uncompressed buffer */
             if (dest_len >= uncompressed_body_length) {
                 /* swap in old, uncompressed buffer */
                 srl_buf_swap_buffer(aTHX_ &enc->buf, &old_buf);
-                /* disable snappy flag */
-                srl_reset_snappy_header_flag(enc);
+                /* disable compression flag */
+                srl_reset_compression_header_flag(enc);
             }
             else { /* go ahead with Snappy and do final fixups */
                 /* overwrite the max size varint with the real size of the compressed data */
@@ -861,8 +1033,8 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src, SV *user_header_src)
 
             srl_buf_free_buffer(aTHX_ &old_buf);
             assert(enc->buf.pos <= enc->buf.end);
-        } /* end of "actually do snappy compression" */
-    } /* end of "want snappy compression?" */
+        } /* End of "actually do compression" */
+    } /* End of "want compression?" */
 
     /* NOT doing a
      *   SRL_ENC_RESET_OPER_FLAG(enc, SRL_OF_ENCODER_DIRTY);
@@ -917,41 +1089,6 @@ srl_fixup_weakrefs(pTHX_ srl_encoder_t *enc)
     PTABLE_iter_free(it);
 }
 
-#ifndef MAX_CHARSET_NAME_LENGTH
-#    define MAX_CHARSET_NAME_LENGTH 2
-#endif
-
-#if PERL_VERSION == 10
-/*
-	Apparently regexes in 5.10 are "modern" but with 5.8 internals
-*/
-#    define RXf_PMf_STD_PMMOD_SHIFT 12
-#    define RX_EXTFLAGS(re)	((re)->extflags)
-#    define RX_PRECOMP(re) ((re)->precomp)
-#    define RX_PRELEN(re) ((re)->prelen)
-
-/* Maybe this is only on OS X, where SvUTF8(sv) exists but looks at flags that don't exist */
-#    define RX_UTF8(re) (RX_EXTFLAGS(re) & RXf_UTF8)
-
-#elif defined(SvRX)
-#    define MODERN_REGEXP
-     /* With commit 8d919b0a35f2b57a6bed2f8355b25b19ac5ad0c5 (perl.git) and
-      * release 5.17.6, regular expression are no longer SvPOK (IOW are no longer
-      * considered to be containing a string).
-      * This breaks some of the REGEXP detection logic in srl_dump_sv, so
-      * we need yet another CPP define. */
-#    if PERL_VERSION > 17 || (PERL_VERSION == 17 && PERL_SUBVERSION >= 6)
-#        define REGEXP_NO_LONGER_POK
-#    endif
-#else
-#    define INT_PAT_MODS "msix"
-#    define RXf_PMf_STD_PMMOD_SHIFT 12
-#    define RX_PRECOMP(re) ((re)->precomp)
-#    define RX_PRELEN(re) ((re)->prelen)
-#    define RX_UTF8(re) ((re)->reganch & ROPT_UTF8)
-#    define RX_EXTFLAGS(re) ((re)->reganch)
-#    define RXf_PMf_COMPILETIME  PMf_COMPILETIME
-#endif
 
 
 static inline void
@@ -1352,6 +1489,12 @@ redo_dump:
     /* check if we have seen this scalar before, and track it so
      * if we see it again we recognize it */
     if ( expect_false( refcount > 1 ) ) {
+        if (src == &PL_sv_undef && enc->protocol_version >=3 ) {
+            srl_buf_cat_char(enc, SRL_HDR_CANONICAL_UNDEF);
+            --enc->recursion_depth;
+            return;
+        }
+        else
         if (src == &PL_sv_yes) {
             srl_buf_cat_char(enc, SRL_HDR_TRUE);
             --enc->recursion_depth;
@@ -1402,17 +1545,9 @@ redo_dump:
         /* goto redo_dump; */
         /* Probably a "proper" solution would, but there are nits there that I dont want to chase right now. */
     }
-    if (SvPOKp(src)) {
-#if defined(MODERN_REGEXP) && !defined(REGEXP_NO_LONGER_POK)
-        /* Only need to enter here if we have rather modern regexps, but they're
-         * still POK (pre 5.17.6). */
-        if (expect_false( svt == SVt_REGEXP ) ) {
-            srl_dump_regexp(aTHX_ enc, src);
-        }
-        else
-#endif
-        srl_dump_svpv(aTHX_ enc, src);
-    }
+
+    /* --------------------------------- */
+    _SRL_IF_SIMPLE_DIRECT_DUMP_SV(enc, src, svt)
     else
 #if defined(MODERN_REGEXP) && defined(REGEXP_NO_LONGER_POK)
     /* Only need to enter here if we have rather modern regexps AND they're
@@ -1422,16 +1557,6 @@ redo_dump:
     }
     else
 #endif
-    if (SvNOKp(src)) {
-        /* dump floats */
-        srl_dump_nv(aTHX_ enc, src);
-    }
-    else
-    if (SvIOKp(src)) {
-        /* dump ints */
-        srl_dump_ivuv(aTHX_ enc, src);
-    }
-    else
     if (SvROK(src)) {
         /* dump references */
         SV *referent= SvRV(src);
@@ -1540,7 +1665,9 @@ redo_dump:
             } STMT_END
             SRL_HANDLE_UNSUPPORTED_TYPE(enc, src, svt, refsv, ref_rewrite_pos);
         }
-        else {
+        else if (src == &PL_sv_undef && enc->protocol_version >= 3 ) {
+            srl_buf_cat_char(enc, SRL_HDR_CANONICAL_UNDEF);
+        } else {
             srl_buf_cat_char(enc, SRL_HDR_UNDEF);
         }
     }
