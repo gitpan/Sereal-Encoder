@@ -736,11 +736,12 @@ my @names = (qw(SRL_HDR_ALIAS SRL_HDR_ARRAY SRL_HDR_ARRAYREF
 	       SRL_HDR_SHORT_BINARY SRL_HDR_SHORT_BINARY_HIGH
 	       SRL_HDR_SHORT_BINARY_LOW SRL_HDR_STR_UTF8 SRL_HDR_TRACK_FLAG
 	       SRL_HDR_TRUE SRL_HDR_UNDEF SRL_HDR_VARINT SRL_HDR_WEAKEN
-	       SRL_HDR_ZIGZAG SRL_MAGIC_STRING_LILIPUTIAN SRL_MAGIC_STRLEN
-	       SRL_MAGIC_STRLEN_HIGHBIT_UTF8 SRL_MASK_ARRAYREF_COUNT
-	       SRL_MASK_HASHREF_COUNT SRL_MASK_SHORT_BINARY_LEN
-	       SRL_NEG_MIN_SIZE SRL_POS_MAX_SIZE SRL_PROTOCOL_ENCODING_MASK
-	       SRL_PROTOCOL_ENCODING_RAW SRL_PROTOCOL_ENCODING_SNAPPY
+	       SRL_HDR_ZIGZAG SRL_MAGIC_STRING_HIGHBIT_UINT_LE
+	       SRL_MAGIC_STRING_HIGHBIT_UTF8_UINT_LE SRL_MAGIC_STRING_UINT_LE
+	       SRL_MAGIC_STRLEN SRL_MASK_ARRAYREF_COUNT SRL_MASK_HASHREF_COUNT
+	       SRL_MASK_SHORT_BINARY_LEN SRL_NEG_MIN_SIZE SRL_POS_MAX_SIZE
+	       SRL_PROTOCOL_ENCODING_MASK SRL_PROTOCOL_ENCODING_RAW
+	       SRL_PROTOCOL_ENCODING_SNAPPY
 	       SRL_PROTOCOL_ENCODING_SNAPPY_INCREMENTAL
 	       SRL_PROTOCOL_ENCODING_ZLIB SRL_PROTOCOL_HDR_CONTINUE
 	       SRL_PROTOCOL_HDR_USER_DATA SRL_PROTOCOL_VERSION
@@ -878,13 +879,32 @@ __END__
     }
     break;
   case 24:
-    if (memEQ(name, "SRL_HDR_SHORT_BINARY_LOW", 24)) {
+    /* Names all of length 24.  */
+    /* SRL_HDR_SHORT_BINARY_LOW SRL_MAGIC_STRING_UINT_LE */
+    /* Offset 11 gives the best switch position.  */
+    switch (name[11]) {
+    case 'R':
+      if (memEQ(name, "SRL_HDR_SHORT_BINARY_LOW", 24)) {
+      /*                          ^                   */
 #ifdef SRL_HDR_SHORT_BINARY_LOW
-      *iv_return = SRL_HDR_SHORT_BINARY_LOW;
-      return PERL_constant_ISIV;
+        *iv_return = SRL_HDR_SHORT_BINARY_LOW;
+        return PERL_constant_ISIV;
 #else
-      return PERL_constant_NOTDEF;
+        return PERL_constant_NOTDEF;
 #endif
+      }
+      break;
+    case 'T':
+      if (memEQ(name, "SRL_MAGIC_STRING_UINT_LE", 24)) {
+      /*                          ^                   */
+#ifdef SRL_MAGIC_STRING_UINT_LE
+        *iv_return = SRL_MAGIC_STRING_UINT_LE;
+        return PERL_constant_ISIV;
+#else
+        return PERL_constant_NOTDEF;
+#endif
+      }
+      break;
     }
     break;
   case 25:
@@ -892,16 +912,6 @@ __END__
     break;
   case 26:
     return constant_26 (aTHX_ name, iv_return);
-    break;
-  case 27:
-    if (memEQ(name, "SRL_MAGIC_STRING_LILIPUTIAN", 27)) {
-#ifdef SRL_MAGIC_STRING_LILIPUTIAN
-      *iv_return = SRL_MAGIC_STRING_LILIPUTIAN;
-      return PERL_constant_ISIV;
-#else
-      return PERL_constant_NOTDEF;
-#endif
-    }
     break;
   case 28:
     if (memEQ(name, "SRL_PROTOCOL_ENCODING_SNAPPY", 28)) {
@@ -913,10 +923,20 @@ __END__
 #endif
     }
     break;
-  case 29:
-    if (memEQ(name, "SRL_MAGIC_STRLEN_HIGHBIT_UTF8", 29)) {
-#ifdef SRL_MAGIC_STRLEN_HIGHBIT_UTF8
-      *iv_return = SRL_MAGIC_STRLEN_HIGHBIT_UTF8;
+  case 32:
+    if (memEQ(name, "SRL_MAGIC_STRING_HIGHBIT_UINT_LE", 32)) {
+#ifdef SRL_MAGIC_STRING_HIGHBIT_UINT_LE
+      *iv_return = SRL_MAGIC_STRING_HIGHBIT_UINT_LE;
+      return PERL_constant_ISIV;
+#else
+      return PERL_constant_NOTDEF;
+#endif
+    }
+    break;
+  case 37:
+    if (memEQ(name, "SRL_MAGIC_STRING_HIGHBIT_UTF8_UINT_LE", 37)) {
+#ifdef SRL_MAGIC_STRING_HIGHBIT_UTF8_UINT_LE
+      *iv_return = SRL_MAGIC_STRING_HIGHBIT_UTF8_UINT_LE;
       return PERL_constant_ISIV;
 #else
       return PERL_constant_NOTDEF;
