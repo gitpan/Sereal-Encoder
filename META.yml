@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Sereal-Encoder
-version:            3.000_003
+version:            3.000_004
 abstract:           Fast, compact, powerful binary serialization
 author:
     - Steffen Mueller <smueller@cpan.org>, Yves Orton <yves@cpan.org>
