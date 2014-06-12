@@ -32,4 +32,4 @@ requires:
 resources:
   bugtracker: https://github.com/Sereal/Sereal/issues
   repository: git://github.com/Sereal/Sereal.git
-version: 3.001
+version: 3.001_001
