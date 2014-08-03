@@ -15,13 +15,12 @@ use Sereal::TestSet qw(:all);
 use Test::More;
 
 my $ok = have_encoder_and_decoder();
+$ok= 0 if $Sereal::Encoder::VERSION < 3.001006;
 if (not $ok) {
     plan skip_all => 'Did not find right version of encoder';
 }
 else {
-    run_roundtrip_tests(
-        'readonly',       { set_readonly     => 1 } 
-    );
+    run_roundtrip_tests('snappy_canon', { snappy => 1, canonical => 1 } );
 }
 
 

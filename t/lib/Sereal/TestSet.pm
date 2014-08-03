@@ -10,7 +10,8 @@ use Test::More;
 use Test::LongString;
 #use Data::Dumper; # MUST BE LOADED *AFTER* THIS FILE (BUG IN PERL)
 use Devel::Peek;
-use Encode qw(encode_utf8);
+use Encode qw(encode_utf8 is_utf8);
+use Scalar::Util qw(reftype blessed refaddr);
 
 # Dynamically load constants from whatever is being tested
 our ($Class, $ConstClass);
@@ -36,7 +37,7 @@ our @ISA = qw(Exporter);
 our @EXPORT_OK = qw(
     @BasicTests $Class $ConstClass
     Header
-    FBIT
+    TRACK_FLAG
     hobodecode
     integer short_string varint array array_fbit
     hash dump_bless
@@ -45,12 +46,15 @@ our @EXPORT_OK = qw(
     write_test_files
     $use_objectv
     setup_tests
+    _deep_cmp
+    _test
+    _test_str
 );
 
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 our $use_objectv = 1;
 
-use constant FBIT => 128;
+use constant TRACK_FLAG => 128;
 
 sub hobodecode {
     return unless defined $_[0];
@@ -72,7 +76,7 @@ sub array {
 
 sub array_fbit {
     chr(SRL_HDR_REFN).
-    chr(SRL_HDR_ARRAY+FBIT) . varint(0+@_) . join("", @_)
+    chr(SRL_HDR_ARRAY+TRACK_FLAG) . varint(0+@_) . join("", @_)
 }
 
 sub hash_head {
@@ -318,7 +322,7 @@ sub setup_tests {
         [
             $weak_thing,
             chr(SRL_HDR_REFN) 
-            . chr(SRL_HDR_ARRAY + FBIT) . varint(2)
+            . chr(SRL_HDR_ARRAY + TRACK_FLAG) . varint(2)
                 . chr(SRL_HDR_PAD) . chr(SRL_HDR_REFN) 
                     . chr(SRL_HDR_REFP) . varint(offseti(1))
                 . chr(0b0000_0001)
@@ -328,7 +332,7 @@ sub setup_tests {
         [
             \$weak_thing,
             chr(SRL_HDR_REFN)
-            . chr(SRL_HDR_REFN + FBIT)
+            . chr(SRL_HDR_REFN + TRACK_FLAG)
                 . chr(SRL_HDR_ARRAY) . varint(2)
                     .chr(SRL_HDR_WEAKEN) . chr(SRL_HDR_REFP) . varint(offseti(1))
                     .chr(0b0000_0001)
@@ -337,7 +341,7 @@ sub setup_tests {
         ],
         sub { \@_ } ->(
             $weak_thing,
-            chr(SRL_HDR_REFN + FBIT)
+            chr(SRL_HDR_REFN + TRACK_FLAG)
                 .chr(SRL_HDR_ARRAY).varint(2)
                     .chr(SRL_HDR_WEAKEN).chr(SRL_HDR_REFP).varint(offseti(0))
                     .chr(0b0000_0001)
@@ -350,8 +354,8 @@ sub setup_tests {
                 my $content= array_head(2);
                 my $pos= offset($content);
                 $content
-                . chr(SRL_HDR_REFN + FBIT)
-                . chr(SRL_HDR_REFP + FBIT)
+                . chr(SRL_HDR_REFN + TRACK_FLAG)
+                . chr(SRL_HDR_REFP + TRACK_FLAG)
                 . varint( $pos )
                 . chr(SRL_HDR_ALIAS)
                 . varint($pos + 1)
@@ -364,9 +368,9 @@ sub setup_tests {
                 my $content= array_head(2);
                 my $pos= offset($content);
                 $content
-                . chr(SRL_HDR_WEAKEN + FBIT)
+                . chr(SRL_HDR_WEAKEN + TRACK_FLAG)
                 . chr(SRL_HDR_REFN)
-                . chr(SRL_HDR_WEAKEN + FBIT)
+                . chr(SRL_HDR_WEAKEN + TRACK_FLAG)
                 . chr(SRL_HDR_REFP)
                 . varint($pos)
                 . chr(SRL_HDR_ALIAS)
@@ -388,7 +392,7 @@ sub setup_tests {
                     chr(SRL_HDR_OBJECT),
                     short_string("bar"),
                     chr(SRL_HDR_REFN),
-                    chr(SRL_HDR_REGEXP + FBIT),
+                    chr(SRL_HDR_REGEXP + TRACK_FLAG),
                     short_string("foo"),
                     short_string("ix"),
                     chr(SRL_HDR_REFP),
@@ -404,10 +408,10 @@ sub setup_tests {
                 my $pos= offset($content);
                 join("",$content,
                             short_string("foo"),
-                            chr(SRL_HDR_REFN).chr(SRL_HDR_ARRAY + FBIT),varint(0),
+                            chr(SRL_HDR_REFN).chr(SRL_HDR_ARRAY + TRACK_FLAG),varint(0),
                         chr( SRL_HDR_OBJECT + $use_objectv),
                             $use_objectv ? () : chr(SRL_HDR_COPY), varint($pos),
-                            chr(SRL_HDR_REFN).chr(SRL_HDR_ARRAY  + FBIT), varint(0),
+                            chr(SRL_HDR_REFN).chr(SRL_HDR_ARRAY  + TRACK_FLAG), varint(0),
                         chr(SRL_HDR_REFP),varint($pos + 5),
                         chr(SRL_HDR_REFP),varint($pos + 10),
                     )
@@ -536,6 +540,7 @@ sub get_git_top_dir {
 }
 
 sub have_encoder_and_decoder {
+    my ($min_v)= @_;
     # $Class is the already-loaded class, so the one we're testing
     my $need = $Class =~ /Encoder/ ? "Decoder" : "Encoder";
     my $need_class = "Sereal::$need";
@@ -555,6 +560,11 @@ sub have_encoder_and_decoder {
         return();
     };
     my $cmp_v = $need_class->VERSION;
+    if ($min_v and $cmp_v <= $min_v) {
+        note("Could not load correct version of $need_class for testing "
+             ."(got: $cmp_v, needed at least $min_v)");
+        return;
+    }
     $cmp_v =~ s/_//;
     $cmp_v = sprintf("%.2f", int($cmp_v*100)/100);
     if (not defined $cmp_v or not exists $compat_versions{$cmp_v}) {
@@ -562,7 +572,6 @@ sub have_encoder_and_decoder {
              ."(got: $cmp_v, needed any of ".join(", ", keys %compat_versions).")");
         return();
     }
-
     return 1;
 }
 
@@ -596,7 +605,9 @@ our @ScalarRoundtripTests = (
     ["small int", 3],
     ["small negative int", -8],
     ["largeish int", 100000],
-    ["largeish negative int", -302001],
+    ["largeish negative int -302001",   -302001],
+    ["largeish negative int -1234567",  -1234567],
+    ["largeish negative int -12345678", -12345678],
 
     (
         map {["integer: $_", $_]} (
@@ -618,9 +629,29 @@ our @ScalarRoundtripTests = (
     ["float", 0.2],
     ["short ascii string", "fooo"],
     ["short latin1 string", "Müller"],
-    ["short utf8 string", do {use utf8; " עדיין ח"}],
+    ["short utf8 string", do {use utf8; " עדיין ח"} ],
 
-    ["long ascii string", do{"abc" x 10000}],
+    (map { [ "long ascii string 'a' x $_", do{"a" x $_} ] } (
+        9999,10000,10001,
+        1023,1024,1025,
+        8191,8192,8193,
+    )),
+    (map { [ "long ascii string 'ab' x $_", do{"ab" x $_} ] } (
+        9999,10000,10001,
+        1023,1024,1025,
+        8191,8192,8193,
+    )),
+    (map { [ "long ascii string 'abc' x $_", do{"abc" x $_} ] } (
+        9999,10000,10001,
+        1023,1024,1025,
+        8191,8192,8193,
+    )),
+    (map { [ "long ascii string 'abcd' x $_", do{"abcd" x $_} ] } (
+        9999,10000,10001,
+        1023,1024,1025,
+        8191,8192,8193,
+    )),
+
     ["long latin1 string", "üll" x 10000],
     ["long utf8 string", do {use utf8; " עדיין חשב" x 10000}],
     ["long utf8 string with only ascii", do {use utf8; "foo" x 10000}],
@@ -690,6 +721,10 @@ our @RoundtripTests = (
     (map {["hash ref to " . $_->[0], ({foo => $_->[1]})]} @ScalarRoundtripTests),
     # ---
     (map {["array ref to duplicate " . $_->[0], ([$_->[1], $_->[1]])]} @ScalarRoundtripTests),
+    (map {[
+            "AoA of duplicates " . $_->[0],
+            ( [ $_->[1], [ $_->[1], $_->[1] ], $_->[1], [ $_->[1], $_->[1], $_->[1] ], $_->[1] ] )
+         ]} @ScalarRoundtripTests),
     # ---
     (map {["array ref to aliases " . $_->[0], (sub {\@_}->($_->[1], $_->[1]))]} @ScalarRoundtripTests),
     (map {["array ref to scalar refs to same " . $_->[0], ([\($_->[1]), \($_->[1])])]} @ScalarRoundtripTests),
@@ -731,34 +766,156 @@ sub run_roundtrip_tests {
     run_roundtrip_tests_internal($name . $suffix, $opts);
 }
 
+sub _test {
+    my ($msg, $v1, $v2)= @_;
+    if ($v1 ne $v2) {
+        my $q1= Data::Dumper::qquote($v1);
+        my $q2= Data::Dumper::qquote($v2);
+        return "msg: $q1 ne $q2"
+    }
+    return;
+}
+sub _test_str {
+    my ($msg, $v1, $v2)= @_;
+    if (is_utf8($v1) != is_utf8($v2)) {
+        return "$msg: utf8 flag mismatch";
+    }
+    if ($v1 eq $v2) {
+        return;
+    }
+    my $diff_start= 0;
+    $diff_start++ while $diff_start < length($v1)
+                    and $diff_start < length($v2)
+                    and substr($v1, $diff_start,1) eq substr($v2, $diff_start,1);
+    my $diff_end= $diff_start;
+    $diff_end++ while $diff_end < length($v1)
+                    and $diff_end < length($v2)
+                    and substr($v1, $diff_end,1) ne substr($v2, $diff_end,1);
+    my $length_to_show= $diff_end - $diff_start;
+    $length_to_show= 30 if $length_to_show > 30;
+
+    my $q1= Data::Dumper::qquote(substr($v1, $diff_start, $length_to_show ));
+    my $q2= Data::Dumper::qquote(substr($v2, $diff_start, $length_to_show ));
+    my $context_start= $diff_start > 10 ? $diff_start - 10 : 0;
+
+    if ($context_start < $diff_start) {
+        $q1 = Data::Dumper::qquote(substr($v1,$context_start,10)) . " . " . $q1;
+        $q2 = Data::Dumper::qquote(substr($v2,$context_start,10)) . " . " . $q2;
+    }
+    if ($context_start > 0) {
+        $q1 = "...$q1";
+        $q2 = "...$q2";
+    }
+    if ($length_to_show < 30) {
+        $q1 .= " . " . Data::Dumper::qquote(substr($v1, $diff_start + $length_to_show, 30-$length_to_show));
+        $q2 .= " . " . Data::Dumper::qquote(substr($v2, $diff_start + $length_to_show, 30-$length_to_show));
+    }
+    if ( $diff_start + 30 < length($v1) ) {
+        $q1 .= "..."
+    }
+    if ( $diff_start + 30 < length($v2) ) {
+        $q2 .= "..."
+    }
+    return ($msg, sprintf("%s at offset %d\nv1 = %s (length %d)\nv2 = %s (length %d)\n",
+        $msg, $diff_start, $q1, length($v1), $q2, length($v2)));
+}
+
+sub _deep_cmp {
+    my ($x, $y, $seenx, $seeny)= @_;
+    $seenx||={};
+    $seeny||={};
+    my $cmp;
+
+    $cmp= _test("defined mismatch",defined($x),defined($y))
+        and return $cmp;
+    defined($x)
+        or return "";
+    $cmp=  _test("seen scalar ", ++$seenx->{refaddr \$_[0]}, ++$seeny->{refaddr \$_[1]})
+        || _test("boolean mismatch",!!$x, !!$y)
+        || _test("isref mismatch",!!ref($x), !!ref($y))
+        and return $cmp;
+
+    if (ref $x) {
+        $cmp=  _test("seen ref", ++$seenx->{refaddr $x}, ++$seeny->{refaddr $y})
+            || _test("reftype mismatch",reftype($x), reftype($y))
+            || _test("class mismatch", !blessed($x), !blessed($y))
+            || _test("class different", blessed($x)//"", blessed($y)//"")
+            and return $cmp;
+        return "" if $x == $y
+                  or $seenx->{refaddr $x} > 1;
+
+        if (reftype($x) eq "HASH") {
+            $cmp= _test("keycount mismatch",0+keys(%$x),0+keys(%$y))
+                and return $cmp;
+            foreach my $key (keys %$x) {
+                return "key missing '$key'" unless exists $y->{$key};
+                $cmp= _deep_cmp($x->{$key},$y->{$key}, $seenx, $seeny)
+                    and return $cmp;
+            }
+        } elsif (reftype($x) eq "ARRAY") {
+            $cmp= _test("arraysize mismatch",0+@$x,0+@$y)
+                and return $cmp;
+            foreach my $idx (0..$#$x) {
+                $cmp= _deep_cmp($x->[$idx], $y->[$idx], $seenx, $seeny)
+                    and return $cmp;
+            }
+        } elsif (reftype($x) eq "SCALAR" or reftype($x) eq "REF") {
+            return _deep_cmp($$x, $$y, $seenx, $seeny);
+        } elsif (reftype($x) eq "REGEXP") {
+            $cmp= _test("regexp different","$x","$y")
+                and return $cmp;
+        } else {
+            die "Unknown reftype '",reftype($x)."'";
+        }
+    } else {
+        $cmp= _test_str("strings differ",$x,$y)
+            and return $cmp;
+    }
+    return ""
+}
+
+sub deep_cmp {
+    my ($v1, $v2, $name)= @_;
+    my $diff= _deep_cmp($v1, $v2);
+    if ($diff) {
+        my ($reason,$diag)= split /\n/, $diff, 2;
+        fail("$name - $reason");
+        diag("$reason\n$diag") if $diag;
+        return;
+    }
+    return 1;
+}
+
+
 sub run_roundtrip_tests_internal {
     my ($ename, $opt, $encode_decode_callbacks) = @_;
     my $decoder = Sereal::Decoder->new($opt);
     my $encoder = Sereal::Encoder->new($opt);
+    my %seen_name;
 
-    foreach my $meth (
-                      ['functional simple',
-                        sub {Sereal::Encoder::encode_sereal($_[0], $opt)},
-                        sub {Sereal::Decoder::decode_sereal($_[0], $opt)}],
-                      ['object-oriented',
-                        sub {$encoder->encode($_[0])},
-                        sub {$decoder->decode($_[0])}],
-                      ['functional with object',
-                          sub {Sereal::Encoder::sereal_encode_with_object($encoder, $_[0])},
-                          sub {Sereal::Decoder::sereal_decode_with_object($decoder, $_[0])}],
-                      ['header-body',
-                        sub {$encoder->encode($_[0], 123456789)}, # header data is abitrary to stand out for debugging
-                        sub {$decoder->decode($_[0])}],
-                      ['header-only',
-                        sub {$encoder->encode(987654321, $_[0])}, # body data is abitrary to stand out for debugging
-                        sub {$decoder->decode_only_header($_[0])}],
-                      )
-    {
-        my ($mname, $enc, $dec) = @$meth;
-        next if $mname =~ /header/ and $opt->{use_protocol_v1};
+    foreach my $rt (@RoundtripTests) {
+        my ($name, $data) = @$rt;
 
-        foreach my $rt (@RoundtripTests) {
-            my ($name, $data) = @$rt;
+        foreach my $meth (
+              ['object-oriented',
+                sub {$encoder->encode($_[0])},
+                sub {$decoder->decode($_[0])}],
+              ['functional simple',
+                sub {Sereal::Encoder::encode_sereal($_[0], $opt)},
+                sub {Sereal::Decoder::decode_sereal($_[0], $opt)}],
+              ['functional with object',
+                  sub {Sereal::Encoder::sereal_encode_with_object($encoder, $_[0])},
+                  sub {Sereal::Decoder::sereal_decode_with_object($decoder, $_[0])}],
+              ['header-body',
+                sub {$encoder->encode($_[0], 123456789)}, # header data is abitrary to stand out for debugging
+                sub {$decoder->decode($_[0])}],
+              ['header-only',
+                sub {$encoder->encode(987654321, $_[0])}, # body data is abitrary to stand out for debugging
+                sub {$decoder->decode_only_header($_[0])}],
+        ) {
+            my ($mname, $enc, $dec) = @$meth;
+
+            next if $mname =~ /header/ and $opt->{use_protocol_v1};
 
             my $encoded;
             eval {$encoded = $enc->($data); 1}
@@ -766,21 +923,26 @@ sub run_roundtrip_tests_internal {
                     my $err = $@ || 'Zombie error';
                     diag("Got error while encoding: $err");
                 };
-            ok(defined $encoded, "$name ($ename, $mname, encoded defined)")
+
+            defined($encoded)
                 or do {
+                    fail("$name ($ename, $mname, encoded defined)");
                     debug_checks(\$data, \$encoded, undef);
-                    next;
+                    last;
                 };
+
             my $decoded;
             eval {$decoded = $dec->($encoded); 1}
                 or do {
                     my $err = $@ || 'Zombie error';
                     diag("Got error while decoding: $err");
                 };
-            ok( defined($decoded) == defined($data), "$name ($ename, $mname, decoded definedness)")
+
+            defined($decoded) == defined($data)
                 or do {
+                    fail("$name ($ename, $mname, decoded definedness)");
                     debug_checks(\$data, \$encoded, undef);
-                    next;
+                    last;
                 };
 
             # Second roundtrip
@@ -790,10 +952,12 @@ sub run_roundtrip_tests_internal {
                     my $err = $@ || 'Zombie error';
                     diag("Got error while encoding the second time: $err");
                 };
-            ok(defined $encoded2, "$name ($ename, $mname, encoded2 defined)")
+
+            defined $encoded2
                 or do {
+                    fail("$name ($ename, $mname, encoded2 defined)");
                     debug_checks(\$data, \$encoded, \$decoded);
-                    next;
+                    last;
                 };
 
             my $decoded2;
@@ -803,42 +967,81 @@ sub run_roundtrip_tests_internal {
                     diag("Got error while encoding the second time: $err");
                 };
 
-            ok(defined($decoded2) == defined($data), "$name ($ename, $mname, decoded2 defined)")
-                or next;
-            is_deeply($decoded, $data, "$name ($ename, $mname, decoded vs data)")
+            defined($decoded2) == defined($data)
                 or do {
-                    debug_checks(\$data, undef, \$decoded, "debug");
-                };
-            is_deeply($decoded2, $data, "$name ($ename, $mname, decoded2 vs data)")
-                or do {
-                    debug_checks(\$data, undef, \$decoded2, "debug");
-                };
-            is_deeply($decoded2, $decoded, "$name ($ename, $mname, decoded vs decoded2)")
-                or do {
-                    debug_checks(\$decoded, undef, \$decoded2, "debug");
+                    fail("$name ($ename, $mname, decoded2 defined)");
+                    last;
                 };
 
-            if (0) {
-                # It isnt really safe to test this way right now. The exact output
-                # of two runs of Sereal is not guaranteed to be the same due to the effect of
-                # refcounts. We could disable ARRAYREF/HASHREF as an option,
-                # and then skip these tests. We should probably do that just to test
-                # that we can handle both representations properly at all times.
-                my $ret;
-                if ($name=~/complex/) {
-                    SKIP: {
-                        skip "Encoded string length tests for complex hashes and compression depends on hash key ordering", 1 if $opt->{snappy};
-                        $ret = is(length($encoded2), length($encoded),"$name ($ename, $mname, length encoded2 vs length encoded)");
-                    }
-                } else {
-                    $ret = is_string($encoded2, $encoded, "$name ($ename, $mname, encoded2 vs encoded)");
-                }
-                $ret or do {
-                    debug_checks(\$data, \$encoded, \$decoded);
+            # Third roundtrip
+            my $encoded3;
+            eval {$encoded3 = $enc->($decoded2); 1}
+                or do {
+                    my $err = $@ || 'Zombie error';
+                    diag("Got error while encoding the third time: $err");
                 };
+
+            defined $encoded3
+                or do {
+                    fail("$name ($ename, $mname, encoded3 defined)");
+                    debug_checks(\$data, \$encoded, \$decoded);
+                    last;
+                };
+
+            my $decoded3;
+            eval {$decoded3 = $dec->($encoded3); 1}
+                or do {
+                    my $err = $@ || 'Zombie error';
+                    diag("Got error while encoding the third time: $err");
+                };
+
+            defined($decoded3) == defined($data)
+                or do {
+                    fail("$name ($ename, $mname, decoded3 defined)");
+                    last;
+                };
+
+            deep_cmp($decoded, $data,       "$name ($ename, $mname, decoded vs data)") or last;
+            deep_cmp($decoded2, $data,      "$name ($ename, $mname, decoded2 vs data)") or last;
+            deep_cmp($decoded2, $decoded,   "$name ($ename, $mname, decoded2 vs decoded)") or last;
+
+            deep_cmp($decoded3, $data,      "$name ($ename, $mname, decoded3 vs data)") or last;
+            deep_cmp($decoded3, $decoded,   "$name ($ename, $mname, decoded3 vs decoded)") or last;
+            deep_cmp($decoded3, $decoded2,  "$name ($ename, $mname, decoded3 vs decoded2)") or last;
+
+            if ( $ename =~ /canon/) {
+                deep_cmp($encoded2, $encoded,  "$name ($ename, $mname, encoded2 vs encoded)") or last;
+                deep_cmp($encoded3, $encoded,  "$name ($ename, $mname, encoded3 vs encoded)") or last;
+                deep_cmp($encoded3, $encoded2, "$name ($ename, $mname, encoded3 vs encoded2)") or last;
+
+                if ($ENV{SEREAL_TEST_SAVE_OUTPUT} and $mname eq 'object-oriented') {
+                    use File::Path;
+                    my $combined_name= "$ename - $name";
+                    if (!$seen_name{$combined_name}) {
+                        my @clean= ($ename, $name);
+                        s/[^\w.-]+/_/g, s/__+/_/g for @clean;
+                        my $cleaned= join "/", @clean;
+                        my $dir= $0;
+                        $dir=~s!/[^/]+\z!/data/$clean[0]!;
+                        mkpath $dir unless -d $dir;
+                        my $base= "$dir/$clean[1].enc";
+                        $seen_name{$combined_name}= $base;
+                        for my $f ( [ "", $encoded ], $encoded ne $encoded2 ? [ "2", $encoded2 ] : ()) {
+                            my $file= $base . $f->[0];
+                            next if -e $file;
+                            open my $fh, ">", $file
+                                or die "Can't open '$file' for writing: $!";
+                            binmode($fh);
+                            print $fh $f->[1];
+                            close $fh;
+                        }
+                        diag "Wrote sample files for '$combined_name' to $base";
+                    }
+                }
             }
-        }
-    } # end serialization method iteration
+        } # end method type
+        pass("$name ($ename)");
+    } # end test type
 }
 
 
