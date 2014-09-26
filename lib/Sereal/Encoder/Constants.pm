@@ -4,7 +4,7 @@ package Sereal::Encoder::Constants;
 use strict;
 use warnings;
 use Carp qw(croak);
-use Sereal::Encoder; # for XSLoading
+use Sereal::Encoder; our $VERSION= $Sereal::Encoder::VERSION; # for XSLoading
 our @ISA = qw(Exporter);
 require Exporter;
 our @EXPORT_OK;

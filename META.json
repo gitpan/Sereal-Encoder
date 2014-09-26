@@ -4,7 +4,7 @@
       "Steffen Mueller <smueller@cpan.org>, Yves Orton <yves@cpan.org>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "ExtUtils::MakeMaker version 6.9, CPAN::Meta::Converter version 2.141520",
+   "generated_by" : "ExtUtils::MakeMaker version 6.98, CPAN::Meta::Converter version 2.142060",
    "license" : [
       "perl_5"
    ],
@@ -22,16 +22,9 @@
    "prereqs" : {
       "build" : {
          "requires" : {
-            "Data::Dumper" : "0",
             "ExtUtils::ParseXS" : "2.21",
             "File::Find" : "0",
-            "File::Path" : "0",
-            "File::Spec" : "0",
-            "Scalar::Util" : "0",
-            "Sereal::Decoder" : "3.00",
-            "Test::LongString" : "0",
-            "Test::More" : "0.88",
-            "Test::Warn" : "0"
+            "File::Path" : "0"
          }
       },
       "configure" : {
@@ -44,16 +37,28 @@
             "XSLoader" : "0",
             "perl" : "5.008"
          }
+      },
+      "test" : {
+         "requires" : {
+            "Data::Dumper" : "0",
+            "File::Spec" : "0",
+            "Scalar::Util" : "0",
+            "Sereal::Decoder" : "3.00",
+            "Test::LongString" : "0",
+            "Test::More" : "0.88",
+            "Test::Warn" : "0"
+         }
       }
    },
-   "release_status" : "stable",
+   "release_status" : "testing",
    "resources" : {
       "bugtracker" : {
          "web" : "https://github.com/Sereal/Sereal/issues"
       },
       "repository" : {
+         "type" : "git",
          "url" : "git://github.com/Sereal/Sereal.git"
       }
    },
-   "version" : "3.002"
+   "version" : "3.002_001"
 }
