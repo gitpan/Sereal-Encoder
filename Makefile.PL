@@ -25,6 +25,8 @@ inc::Sereal::BuildTools::generate_constant_includes($module) if $in_source_repo;
 
 our $OPTIMIZE;
 
+my $libs = '';
+my $objects = '$(BASEEXT)$(OBJ_EXT) srl_encoder$(OBJ_EXT)';
 my $defines = join " ", map "-D$_", grep exists $ENV{$_},
               qw(NOINLINE DEBUG MEMDEBUG NDEBUG ENABLE_DANGEROUS_HACKS);
 
@@ -56,13 +58,18 @@ if ($Config{osname} eq 'hpux' && not $Config{gccversion}) {
   $defines .= " -Dinline= ";
 }
 
-# from Compress::Snappy
-require Devel::CheckLib;
-my $ctz = Devel::CheckLib::check_lib(
-    lib      => 'c',
-    function => 'return (__builtin_ctzll(0x100000000LL) != 32);'
-) ? '-DHAVE_BUILTIN_CTZ' : '';
-$defines .= " $ctz" if $ctz;
+# Prefer external libraries over the bundled one.
+inc::Sereal::BuildTools::check_external_libraries(\$libs, \$defines, \$objects);
+
+if ($defines !~ /HAVE_CSNAPPY/) {
+    # from Compress::Snappy
+    require Devel::CheckLib;
+    my $ctz = Devel::CheckLib::check_lib(
+        lib      => 'c',
+        function => 'return (__builtin_ctzll(0x100000000LL) != 32);'
+    ) ? '-DHAVE_BUILTIN_CTZ' : '';
+    $defines .= " $ctz" if $ctz;
+}
 
 # See lib/ExtUtils/MakeMaker.pm for details of how to influence
 # the contents of the Makefile that is written.
@@ -101,11 +108,11 @@ WriteMakefile1(
     LICENSE => 'perl',
     ABSTRACT_FROM => 'lib/Sereal/Encoder.pm',
     AUTHOR => 'Steffen Mueller <smueller@cpan.org>, Yves Orton <yves@cpan.org>',
-    LIBS              => [''], # e.g., '-lm'
+    LIBS              => [$libs], # e.g., '-lm'
     DEFINE            => $defines,
     INC               => '-I.', # e.g., '-I. -I/usr/include/other'
     OPTIMIZE          => $OPTIMIZE,
-    OBJECT            => '$(O_FILES)',
+    OBJECT            => $objects,
     test              => {
         TESTS => "t/*.t t/*/*/*.t",
     },
