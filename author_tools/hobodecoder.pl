@@ -6,18 +6,35 @@ use Data::Dumper;
 use Getopt::Long qw(GetOptions);
 our @constants;
 BEGIN {
-    my $err;
-    eval '
-        use Sereal::Encoder::Constants qw(:all);
-        @constants= @Sereal::Encoder::Constants::EXPORT_OK;
-        print "Loaded constants from $INC{q(Sereal/Encoder/Constants.pm)}\n";
-        1;
-    ' or do { $err= $@; eval '
-        use Sereal::Decoder::Constants qw(:all);
-        @constants= @Sereal::Decoder::Constants::EXPORT_OK;
-        print "Loaded constants from $INC{q(Sereal/Decoder/Constants.pm)}\n";
-        1;
-    ' } or die "No encoder/decoder constants: $err\n$@";
+    my $add_use_blib= "";
+    my $use= "";
+    my @check;
+    for my $type ("Decoder","Encoder") {
+        if (-e "blib/lib/Sereal/$type/Constants.pm") {
+            $add_use_blib="use blib;";
+            @check= ($type);
+            last;
+        }
+        push @check, $type;
+    }
+
+    my @err;
+    foreach my $check (@check) {
+        if (eval(my $code= sprintf '
+                %s
+                use Sereal::%s::Constants qw(:all);
+                @constants= @Sereal::%s::Constants::EXPORT_OK;
+                print "Loaded constants from $INC{q(Sereal/%s/Constants.pm)}\n";
+                1;
+            ', $add_use_blib, ($check) x 3))
+        {
+            @err= ();
+            last;
+        } else {
+            push @err, "Error:",$@ || "Zombie Error","\nCode:\n$code";
+        }
+    }
+    die @err if @err;
 }
 
 my $done;
@@ -246,9 +263,7 @@ sub parse_av {
   printf "(%u)\n", $len;
   $ind .= "  ";
   while ($len--) {
-    my $t = substr($data, 0, 1);
-    my $o = ord($t);
-      parse_sv($ind);
+    parse_sv($ind,\$len);
   }
 }
 
@@ -259,8 +274,6 @@ sub parse_hv {
   $ind .= "  ";
   my $flipflop = 0;
   while ($len--) {
-    my $t = substr($data, 0, 1);
-    my $o = ord($t);
     printf  "$fmt2%s:\n",("") x $lead_items, $ind, ($flipflop++ %2 == 1 ? "VALUE" : "KEY");
     parse_sv($ind."  ");
   }
@@ -288,12 +301,12 @@ sub varint {
   return $x;
 }
 
-BEGIN{
-my $_shift= length(pack"j",0) * 8 - 1;
-sub zigzag {
-    my $n= varint();
-    return ($n >> 1) ^ (-($n & 1));
+sub _zigzag {
+    my $n= $_[0];
+    return $n & 1 ? -(($n >> 1)+1) : ($n >> 1);
 }
+sub zigzag {
+    return _zigzag(varint());
 }
 
 GetOptions(
