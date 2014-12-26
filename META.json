@@ -29,7 +29,7 @@
       },
       "configure" : {
          "requires" : {
-            "ExtUtils::MakeMaker" : "0"
+            "ExtUtils::MakeMaker" : "7.0"
          }
       },
       "runtime" : {
@@ -60,5 +60,5 @@
          "url" : "git://github.com/Sereal/Sereal.git"
       }
    },
-   "version" : "3.003_002"
+   "version" : "3.003_003"
 }
